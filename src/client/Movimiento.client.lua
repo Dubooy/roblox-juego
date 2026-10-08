@@ -174,6 +174,31 @@ local function muroCercano()
 	return mejor
 end
 
+-- Mientras escalas o cuelgas de una barra, el script mueve el cuerpo a mano.
+-- Se pone el Humanoid en estado "Physics" (no hace nada por su cuenta) y el cuerpo
+-- se mantiene siempre derecho mirando hacia donde mira la cámara, así la vista no gira.
+local function cuerpoManual(activar)
+	if activar then
+		humanoid.AutoRotate = false
+		humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+		linVel.Enabled = false
+	else
+		humanoid.AutoRotate = true
+		humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+		linVel.Enabled = true
+	end
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function ponerCuerpo(pos)
+	local mirar = flat(camera.CFrame.LookVector)
+	if mirar.Magnitude < 0.01 then
+		mirar = flat(root.CFrame.LookVector)
+	end
+	root.CFrame = CFrame.lookAt(pos, pos + mirar.Unit)
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
 ------------------------------------------------------------------------
 -- Escalar bordes
 ------------------------------------------------------------------------
@@ -250,8 +275,7 @@ local function agarrarBarra(b, vel, now)
 	s.modo = "barra"
 	s.wallrun = nil
 	s.sliding = false
-	linVel.Enabled = false
-	humanoid.PlatformStand = true
+	cuerpoManual(true)
 end
 
 local function soltarBarra(conImpulso, now)
@@ -259,13 +283,19 @@ local function soltarBarra(conImpulso, now)
 	s.barra = nil
 	s.modo = "normal"
 	s.barraSoltadaAt = now
-	linVel.Enabled = true
-	humanoid.PlatformStand = false
-	humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+	cuerpoManual(false)
 	local tangente = b.frente * math.cos(b.theta) + UP * math.sin(b.theta)
 	local v = tangente * (b.omega * C.BARRA_RADIO)
 	if conImpulso then
-		v = v * C.BARRA_IMPULSO + UP * C.BARRA_SALTO_EXTRA
+		-- salir lanzado: lo que lleves de balanceo, más un empujón hacia arriba y
+		-- hacia donde miras (así siempre sirve, aunque no te hayas balanceado)
+		local mirar = flat(camera.CFrame.LookVector)
+		mirar = mirar.Magnitude > 0.01 and mirar.Unit or b.frente
+		local h = flat(v) * C.BARRA_IMPULSO
+		if h:Dot(mirar) < C.WALK_SPEED then
+			h = mirar * math.max(h:Dot(mirar), C.WALK_SPEED) + (h - mirar * h:Dot(mirar)) * 0.5
+		end
+		v = Vector3.new(h.X, math.max(v.Y, 0) + C.BARRA_SALTO_EXTRA, h.Z)
 		sumarCombo(now)
 		s.fovPunch = C.FOV_GOLPE
 	end
@@ -303,9 +333,7 @@ local function pasoBarra(dt, now)
 	end
 
 	local pos = b.punto + (b.frente * math.sin(b.theta) - UP * math.cos(b.theta)) * C.BARRA_RADIO
-	local mirar = flat(camera.CFrame.LookVector)
-	local giro = mirar.Magnitude > 0.01 and CFrame.lookAt(Vector3.zero, mirar) or CFrame.identity
-	root.CFrame = CFrame.new(pos) * giro
+	ponerCuerpo(pos)
 	local tangente = b.frente * math.cos(b.theta) + UP * math.sin(b.theta)
 	root.AssemblyLinearVelocity = tangente * (b.omega * C.BARRA_RADIO)
 	s.speed = math.abs(b.omega * C.BARRA_RADIO)
@@ -368,14 +396,14 @@ local function step(dt)
 			e.desde.Y + (e.hasta.Y - e.desde.Y) * subida,
 			e.desde.Z + (e.hasta.Z - e.desde.Z) * avance
 		)
-		root.CFrame = CFrame.new(pos) * (root.CFrame - root.CFrame.Position)
+		ponerCuerpo(pos)
 		root.AssemblyLinearVelocity = Vector3.zero
 		linVel.VectorVelocity = Vector3.zero
 		if t >= 1 then
 			s.modo = "normal"
 			s.escalar = nil
-			humanoid.PlatformStand = false
-			linVel.Enabled = true
+			cuerpoManual(false)
+			humanoid:ChangeState(Enum.HumanoidStateType.Running)
 			linVel.VectorVelocity = e.salida
 			root.AssemblyLinearVelocity = e.salida
 			s.lastGroundedAt = now
@@ -494,8 +522,7 @@ local function step(dt)
 				}
 				s.modo = "escalar"
 				s.wallrun = nil
-				humanoid.PlatformStand = true
-				linVel.Enabled = false
+				cuerpoManual(true)
 				sumarCombo(now)
 				publicar(true)
 				return
@@ -622,11 +649,6 @@ local function cameraStep(dt)
 		camera.CFrame *= CFrame.Angles(-e * math.pi * 2, 0, 0)
 	end
 
-	-- escalando: la cámara se inclina hacia el borde
-	if s.modo == "escalar" and s.escalar then
-		local t = math.clamp((now - s.escalar.inicio) / s.escalar.duracion, 0, 1)
-		camera.CFrame *= CFrame.Angles(-math.sin(t * math.pi) * math.rad(10), 0, 0)
-	end
 
 	s.landDip += (0 - s.landDip) * math.min(dt * 10, 1)
 	local drop = (s.sliding and C.SLIDE_CAMERA_DROP or 0) + s.landDip + (now < s.rodandoHasta and 1.5 or 0)
@@ -646,19 +668,21 @@ hud.Parent = player:WaitForChild("PlayerGui")
 
 local speedLabel = Instance.new("TextLabel")
 speedLabel.AnchorPoint = Vector2.new(0.5, 1)
-speedLabel.Position = UDim2.new(0.5, 0, 1, -24)
+speedLabel.Position = UDim2.new(0.5, 0, 0.5, 70)
 speedLabel.Size = UDim2.fromOffset(200, 30)
 speedLabel.BackgroundTransparency = 1
 speedLabel.Font = Enum.Font.GothamBold
-speedLabel.TextSize = 22
+speedLabel.TextSize = 16
+speedLabel.TextTransparency = 0.3
 speedLabel.TextColor3 = Color3.new(1, 1, 1)
 speedLabel.TextStrokeTransparency = 0.6
 speedLabel.Parent = hud
 
 local comboLabel = speedLabel:Clone()
-comboLabel.Position = UDim2.new(0.5, 0, 1, -52)
+comboLabel.Position = UDim2.new(0.5, 0, 0.5, 98)
 comboLabel.TextSize = 18
 comboLabel.TextColor3 = Color3.fromRGB(255, 214, 236)
+comboLabel.Text = ""
 comboLabel.Parent = hud
 
 local crosshair = Instance.new("Frame")
@@ -757,11 +781,8 @@ ReplicatedStorage:WaitForChild("Remotos"):WaitForChild("Empujon").OnClientEvent:
 	elseif s.modo == "escalar" then
 		s.modo = "normal"
 		s.escalar = nil
-		if humanoid then
-			humanoid.PlatformStand = false
-		end
-		if linVel then
-			linVel.Enabled = true
+		if humanoid and linVel then
+			cuerpoManual(false)
 		end
 	end
 	s.empujePendiente = vector

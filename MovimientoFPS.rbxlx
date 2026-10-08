@@ -11,27 +11,27 @@ return {
 	GRAVITY = 196.2,
 
 	-- Suelo
-	WALK_SPEED = 20, -- velocidad normal corriendo
-	GROUND_ACCEL = 9, -- más = arranca antes
+	WALK_SPEED = 26, -- velocidad normal corriendo
+	GROUND_ACCEL = 12, -- más = arranca antes
 	GROUND_FRICTION = 7, -- frenado al soltar las teclas
 	STOP_SPEED = 10,
-	INERCIA_PERDIDA = 9, -- studs/s que pierdes cada segundo corriendo por encima de WALK_SPEED
-	INERCIA_GIRO = 3, -- lo rápido que giras cuando llevas inercia (bajo = más peso)
+	INERCIA_PERDIDA = 6, -- studs/s que pierdes cada segundo corriendo por encima de WALK_SPEED
+	INERCIA_GIRO = 4, -- lo rápido que giras cuando llevas inercia (bajo = más peso)
 
 	-- Aire
-	AIR_ACCEL = 20,
+	AIR_ACCEL = 24,
 	AIR_WISH_CAP = 3, -- poco control en el aire: el salto se decide antes de saltar
-	AIR_STEER = 1.2,
+	AIR_STEER = 1.6,
 
-	MAX_SPEED = 52, -- tope de velocidad horizontal
+	MAX_SPEED = 72, -- tope de velocidad horizontal
 
 	-- Salto (solo desde el suelo; en el aire solo se salta apoyándose en un muro)
-	JUMP_VELOCITY = 52,
+	JUMP_VELOCITY = 58,
 	COYOTE_TIME = 0.12, -- puedes saltar un instante después de salir de un borde
 	JUMP_BUFFER = 0.15, -- si pulsas justo antes de tocar suelo, salta al aterrizar
 
 	-- Slide
-	SLIDE_MIN_START = 16, -- velocidad mínima para empezar a deslizar
+	SLIDE_MIN_START = 18, -- velocidad mínima para empezar a deslizar
 	SLIDE_FRICTION = 0.12, -- rozamiento en llano (bajo = deslizas más lejos)
 	SLIDE_MIN_SPEED = 9, -- por debajo, el slide termina
 	SLIDE_STEER = 1.0,
@@ -40,7 +40,7 @@ return {
 
 	-- Pared: correr por ella y saltar de pared a pared
 	WALLRUN_DISTANCIA = 3, -- studs hasta la pared a cada lado
-	WALLRUN_VEL_MIN = 15,
+	WALLRUN_VEL_MIN = 18,
 	WALLRUN_DURACION = 1.4, -- segundos máximos en la misma pared
 	WALLRUN_SUBIDA_INICIAL = 8, -- al engancharte subes un poco
 	WALLRUN_GRAVEDAD = 22, -- caída suave mientras corres
@@ -48,14 +48,14 @@ return {
 	WALLRUN_INCLINACION = 12, -- grados de inclinación de cámara
 	MURO_SALTO_DISTANCIA = 3.2, -- distancia a un muro para poder saltar de él sin correr por él
 	MURO_SALTO_FUERA = 26, -- empuje hacia fuera del muro
-	MURO_SALTO_ARRIBA = 48,
-	MURO_SALTO_BONUS = 4, -- velocidad que GANAS en cada salto de pared encadenado
+	MURO_SALTO_ARRIBA = 52,
+	MURO_SALTO_BONUS = 5, -- velocidad que GANAS en cada salto de pared encadenado
 
 	-- Escalar bordes
 	ESCALAR_ALTURA_MIN = 2.2, -- por debajo es un escalón: se sube andando
 	ESCALAR_ALTURA_MAX = 8, -- altura máxima del borde respecto a tus pies
 	ESCALAR_ALCANCE = 2.6, -- distancia a la pared para agarrarte
-	ESCALAR_DURACION = 0.38,
+	ESCALAR_DURACION = 0.3,
 	ESCALAR_CONSERVA = 0.75, -- parte de la velocidad que conservas al terminar de subir
 
 	-- Barras (columpiarse)
@@ -63,8 +63,8 @@ return {
 	BARRA_RADIO = 3.6, -- distancia de la barra a tu cuerpo colgado
 	BARRA_BOMBEO = 3.2, -- impulso al pulsar W/S en el sentido del balanceo
 	BARRA_AMORTIGUA = 0.12, -- pérdida de balanceo por segundo
-	BARRA_IMPULSO = 1.25, -- multiplicador de velocidad al soltarte saltando
-	BARRA_SALTO_EXTRA = 12, -- empujón hacia arriba al soltarte
+	BARRA_IMPULSO = 1.3, -- multiplicador de velocidad al soltarte saltando
+	BARRA_SALTO_EXTRA = 42, -- empujón hacia arriba al soltarte saltando
 	BARRA_ESPERA = 0.35, -- tras soltarte, tiempo antes de poder agarrar otra
 
 	-- Aterrizaje: rodar o golpe
@@ -81,14 +81,16 @@ return {
 	-- Cámara
 	FOV_BASE = 75,
 	FOV_MAX_EXTRA = 14, -- FOV extra a máxima velocidad
-	FOV_SPEED_FOR_MAX = 50,
+	FOV_SPEED_FOR_MAX = 70,
 	FOV_GOLPE = 6,
 	ROLL_MAX = 2.5, -- grados de inclinación al moverte de lado
 	LAND_DIP_MAX = 1.6, -- golpe de cámara al aterrizar
 
-	-- Brazos (copia de los de tu avatar pegada a la cámara)
-	BRAZOS_ESCALA = 0.7, -- tamaño respecto a los brazos reales
-	BRAZOS_HOMBRO = Vector3.new(1.05, -1.25, 0.35), -- dónde está el hombro respecto a la cámara (x derecha, y arriba, z atrás)
+	-- Brazos (estilo Roblox clásico con tu piel y tu camiseta, entrando desde abajo)
+	-- Posiciones respecto a la cámara: x derecha, y arriba, z hacia atrás (negativo = delante)
+	BRAZOS_ESCALA = 0.75,
+	BRAZOS_MANO = Vector3.new(1.05, -1.2, -2.5), -- dónde queda la mano en reposo (lado derecho)
+	BRAZOS_CODO = Vector3.new(1.6, -2.2, -1.3), -- de dónde sale el brazo (fuera de la pantalla)
 
 	-- Servidor (anti-trampas básico)
 	SERVER_SPEED_TOLERANCE = 1.35,
@@ -399,8 +401,8 @@ local Mapas = {}
 
 -- Paleta pastel
 local P = {
-	suelo = Color3.fromRGB(246, 238, 228), -- crema
-	sueloB = Color3.fromRGB(236, 226, 214),
+	suelo = Color3.fromRGB(214, 204, 222), -- lavanda grisácea (no deslumbra)
+	sueloB = Color3.fromRGB(204, 194, 214),
 	lila = Color3.fromRGB(205, 190, 238),
 	menta = Color3.fromRGB(178, 230, 210),
 	melocoton = Color3.fromRGB(255, 205, 178),
@@ -481,34 +483,35 @@ local function ambiente()
 		end
 	end
 	Lighting.ClockTime = 14.5
-	Lighting.Brightness = 2.2
+	Lighting.Brightness = 1.6
+	Lighting.ExposureCompensation = -0.35
 	Lighting.Ambient = Color3.fromRGB(150, 140, 165)
-	Lighting.OutdoorAmbient = Color3.fromRGB(190, 180, 205)
+	Lighting.OutdoorAmbient = Color3.fromRGB(150, 140, 170)
 	Lighting.EnvironmentDiffuseScale = 0.6
 	Lighting.EnvironmentSpecularScale = 0.2
 	Lighting.GlobalShadows = true
 	Lighting.ShadowSoftness = 0.6
 
 	local atm = Instance.new("Atmosphere")
-	atm.Density = 0.28
+	atm.Density = 0.2
 	atm.Offset = 0.1
 	atm.Color = Color3.fromRGB(255, 226, 236)
 	atm.Decay = Color3.fromRGB(200, 186, 230)
 	atm.Glare = 0.2
-	atm.Haze = 1.2
+	atm.Haze = 0.6
 	atm.Parent = Lighting
 
 	local cc = Instance.new("ColorCorrectionEffect")
-	cc.Brightness = 0.04
-	cc.Contrast = -0.05
+	cc.Brightness = 0
+	cc.Contrast = 0.05
 	cc.Saturation = -0.12
 	cc.TintColor = Color3.fromRGB(255, 248, 252)
 	cc.Parent = Lighting
 
 	local bloom = Instance.new("BloomEffect")
-	bloom.Intensity = 0.4
+	bloom.Intensity = 0.15
 	bloom.Size = 30
-	bloom.Threshold = 1.6
+	bloom.Threshold = 2.2
 	bloom.Parent = Lighting
 end
 
@@ -1126,16 +1129,14 @@ while true do
 		end
 	end
 end
-]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX14"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX13"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX10"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona (viewmodel).
+]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX14"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX13"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX10"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona (viewmodel), al estilo de los shooters de Roblox:
+-- el antebrazo y la mano de TU avatar (copiados, con tu piel y tu camiseta) entran
+-- desde la parte de abajo de la pantalla.
 --
--- Se hace una COPIA de los brazos de tu avatar (con tu piel, tu camiseta y sus mallas)
--- y se pega a la cámara. Es como lo hacen los shooters de Roblox: no depende del
--- cuerpo de verdad, que en primera persona Roblox esconde.
---
--- Cada brazo es una cadena hombro → codo → mano que apunta hacia donde toque según lo
--- que estés haciendo (lo publica Movimiento.client.lua en atributos Mov*):
+-- Cada brazo se coloca entre dos puntos relativos a la cámara: el CODO (fuera de la
+-- pantalla, abajo) y la MANO. Según lo que hagas, la mano se mueve a otro sitio:
 -- correr, slide, pared, barra, escalar, rodar, salto, aterrizaje y manotazo.
--- Funciona con avatares R15 y R6.
+-- Funciona con avatares R15 (antebrazo + mano) y R6 (brazo entero).
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -1148,7 +1149,7 @@ local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 local modelo
-local brazos = {} -- [lado] = { piezas = {Part...}, largos = {number...}, dir = Vector3, codo = number }
+local brazos = {} -- [lado] = { antebrazo, mano (o nil en R6), mano = Vector3, codo = Vector3 }
 
 local estado = {
 	bob = 0,
@@ -1157,11 +1158,6 @@ local estado = {
 	salto = 0,
 	aterrizaje = 0,
 	estabaEnSuelo = true,
-}
-
-local PIEZAS = {
-	R15 = { [1] = { "RightUpperArm", "RightLowerArm", "RightHand" }, [-1] = { "LeftUpperArm", "LeftLowerArm", "LeftHand" } },
-	R6 = { [1] = { "Right Arm" }, [-1] = { "Left Arm" } },
 }
 
 local function construir()
@@ -1175,54 +1171,63 @@ local function construir()
 	if not hum then
 		return
 	end
-	local tipo = hum.RigType == Enum.HumanoidRigType.R15 and "R15" or "R6"
 
+	-- Brazos de estilo Roblox clásico con TU color de piel y TU camiseta:
+	-- con un Humanoid R6 dentro, Roblox pinta la camiseta en las piezas "Right Arm"/"Left Arm".
+	-- (Las mallas de los avatares R15 tienen formas y orientaciones muy distintas y
+	-- en primera persona quedaban deformes.)
 	modelo = Instance.new("Model")
 	modelo.Name = "BrazosVista"
-	-- con un Humanoid dentro, Roblox pinta la camiseta y los colores del cuerpo
 	local h = Instance.new("Humanoid")
+	h.RigType = Enum.HumanoidRigType.R6
 	h.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 	h.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
 	h.RequiresNeck = false
-	h.BreakJointsOnDeath = false
 	h.EvaluateStateMachine = false
 	h.Parent = modelo
-	for _, nombre in { "Shirt", "BodyColors" } do
-		local v = char:FindFirstChildOfClass(nombre)
-		if v then
-			v:Clone().Parent = modelo
-		end
+	local camiseta = char:FindFirstChildOfClass("Shirt")
+	if camiseta then
+		camiseta:Clone().Parent = modelo
+	end
+
+	-- color de piel: el de los brazos de verdad
+	local function colorDe(lado)
+		local nombre = lado == 1 and "Right" or "Left"
+		local p = char:FindFirstChild(nombre .. "Hand") or char:FindFirstChild(nombre .. " Arm") or char:FindFirstChild(nombre .. "LowerArm")
+		return p and p.Color or Color3.fromRGB(234, 184, 146)
 	end
 
 	for _, lado in { 1, -1 } do
-		local piezas, largos = {}, {}
-		for _, nombre in PIEZAS[tipo][lado] do
-			local original = char:FindFirstChild(nombre)
-			if original then
-				local p = original:Clone()
-				-- quitar uniones y extras; se quedan la malla y las texturas
-				for _, hijo in p:GetChildren() do
-					if not (hijo:IsA("DataModelMesh") or hijo:IsA("Decal") or hijo:IsA("SurfaceAppearance")) then
-						hijo:Destroy()
-					end
-				end
-				p.Size = original.Size * C.BRAZOS_ESCALA
-				p.Anchored = true
-				p.CanCollide = false
-				p.CanQuery = false
-				p.CanTouch = false
-				p.CastShadow = false
-				p.Massless = true
-				p.LocalTransparencyModifier = 0
-				p.Transparency = 0
-				p.Parent = modelo
-				table.insert(piezas, p)
-				table.insert(largos, p.Size.Y)
-			end
+		local p = Instance.new("Part")
+		p.Name = lado == 1 and "Right Arm" or "Left Arm"
+		p.Size = Vector3.new(1, 2, 1) * C.BRAZOS_ESCALA
+		p.Color = colorDe(lado)
+		p.Material = Enum.Material.SmoothPlastic
+		p.TopSurface = Enum.SurfaceType.Smooth
+		p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.CastShadow = false
+		p.Parent = modelo
+		brazos[lado] = {
+			antebrazo = p,
+			posMano = Vector3.new(C.BRAZOS_MANO.X * lado, C.BRAZOS_MANO.Y, C.BRAZOS_MANO.Z),
+			posCodo = Vector3.new(C.BRAZOS_CODO.X * lado, C.BRAZOS_CODO.Y, C.BRAZOS_CODO.Z),
+			giro = 0,
+		}
+	end
+	-- sin camiseta: manga del color del torso
+	if not camiseta then
+		local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+		local bc = Instance.new("BodyColors")
+		bc.RightArmColor3 = brazos[1].antebrazo.Color
+		bc.LeftArmColor3 = brazos[-1].antebrazo.Color
+		if torso then
+			bc.TorsoColor3 = torso.Color
 		end
-		if #piezas > 0 then
-			brazos[lado] = { piezas = piezas, largos = largos, dir = Vector3.new(0, -0.4, -1).Unit, codo = 0.4 }
-		end
+		bc.Parent = modelo
 	end
 	modelo.Parent = camera
 end
@@ -1231,37 +1236,28 @@ local function lerp(a, b, t)
 	return a + (b - a) * t
 end
 
--- vector "lateral" hecho perpendicular a "abajo"
-local function unitLateral(lateral, abajo)
-	local d = lateral - abajo * lateral:Dot(abajo)
-	if d.Magnitude < 0.01 then
-		d = abajo:Cross(Vector3.zAxis)
+-- Coloca una pieza entre a y b (en el mundo), con su -Y mirando de a hacia b.
+-- "giro" rota la pieza sobre su eje (para poner la mano de canto en el manotazo).
+local function entre(p, a, b, lateral, giro)
+	local dir = b - a
+	if dir.Magnitude < 0.01 then
+		return
 	end
-	return d.Unit
-end
-
--- coloca una pieza para que vaya de "desde" en dirección "dir" (su -Y apunta en dir)
-local function colocar(p, desde, dir, largo, lateral)
-	local abajo = -dir
-	local derecha = unitLateral(lateral, abajo)
+	local abajo = -dir.Unit
+	local derecha = lateral - abajo * lateral:Dot(abajo)
+	derecha = derecha.Magnitude > 0.01 and derecha.Unit or abajo:Cross(Vector3.zAxis).Unit
 	local atras = derecha:Cross(abajo)
-	p.CFrame = CFrame.fromMatrix(desde + dir * (largo / 2), derecha, abajo, atras)
-	return desde + dir * largo
-end
-
--- gira "v" un ángulo alrededor de "eje"
-local function girar(v, eje, ang)
-	return CFrame.fromAxisAngle(eje, ang):VectorToWorldSpace(v)
+	p.CFrame = CFrame.fromMatrix((a + b) / 2, derecha, abajo, atras) * CFrame.Angles(0, giro, 0)
 end
 
 local function actualizar(dt)
+	if not modelo then
+		return
+	end
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local cabeza = char and char:FindFirstChild("Head")
 	local visible = hum and hum.Health > 0 and cabeza and (camera.CFrame.Position - cabeza.Position).Magnitude < 2.5
-	if not modelo then
-		return
-	end
 	modelo.Parent = visible and camera or nil
 	if not visible then
 		return
@@ -1277,13 +1273,11 @@ local function actualizar(dt)
 	local rodando = player:GetAttribute("MovRodando") == true
 	local ultimoSalto = player:GetAttribute("MovUltimoSalto") or -math.huge
 
-	-- balanceo al correr
-	local andar = (enSuelo and not enSlide and modo == "normal") and math.clamp(vel / 20, 0, 1.3) or 0
-	estado.bob += dt * (4 + vel * 0.28) * (andar > 0.05 and 1 or 0)
+	local andar = (enSuelo and not enSlide and modo == "normal") and math.clamp(vel / C.WALK_SPEED, 0, 1.4) or 0
+	estado.bob += dt * (5 + vel * 0.25) * (andar > 0.05 and 1 or 0)
 
-	-- retraso al girar la vista
 	local delta = UserInputService:GetMouseDelta()
-	estado.sway = estado.sway:Lerp(Vector2.new(math.clamp(-delta.X * 0.005, -0.2, 0.2), math.clamp(delta.Y * 0.005, -0.2, 0.2)), math.min(dt * 8, 1))
+	estado.sway = estado.sway:Lerp(Vector2.new(math.clamp(-delta.X * 0.004, -0.15, 0.15), math.clamp(delta.Y * 0.004, -0.15, 0.15)), math.min(dt * 8, 1))
 
 	if ultimoSalto ~= estado.ultimoSalto then
 		estado.ultimoSalto = ultimoSalto
@@ -1296,84 +1290,73 @@ local function actualizar(dt)
 	estado.estabaEnSuelo = enSuelo
 	estado.aterrizaje = lerp(estado.aterrizaje, 0, math.min(dt * 9, 1))
 
-	-- manotazo: 0 → 1 → 0 en ~0,3 s
 	local tm = now - (player:GetAttribute("MovManotazo") or -math.huge)
 	local golpe = 0
-	if tm < 0.08 then
-		golpe = tm / 0.08
-	elseif tm < 0.32 then
-		golpe = (1 - (tm - 0.08) / 0.24) ^ 2
+	if tm < 0.07 then
+		golpe = tm / 0.07
+	elseif tm < 0.3 then
+		golpe = (1 - (tm - 0.07) / 0.23) ^ 2
 	end
 
 	local cam = camera.CFrame
 	for lado, b in brazos do
 		local l = lado
-		local hombro = cam:PointToWorldSpace(Vector3.new(C.BRAZOS_HOMBRO.X * l, C.BRAZOS_HOMBRO.Y, C.BRAZOS_HOMBRO.Z))
-		local objetivo -- dirección en el mundo
-		local codo = 0.45 -- radianes de doblez
+		local reposo = Vector3.new(C.BRAZOS_MANO.X * l, C.BRAZOS_MANO.Y, C.BRAZOS_MANO.Z)
+		local codoReposo = Vector3.new(C.BRAZOS_CODO.X * l, C.BRAZOS_CODO.Y, C.BRAZOS_CODO.Z)
+		local mano, codo, giro = reposo, codoReposo, 0
+		local rapidez = 14
 
 		if modo == "barra" and typeof(barra) == "Vector3" then
-			-- las dos manos a la barra, brazos estirados
-			local agarre = barra + cam.RightVector * 0.7 * l
-			objetivo = (agarre - hombro).Unit
-			codo = 0.05
+			-- manos arriba agarrando la barra
+			local agarre = cam:PointToObjectSpace(barra + cam.RightVector * 0.8 * l)
+			mano = agarre
+			codo = Vector3.new(0.9 * l, -0.6, -0.2)
+			rapidez = 22
 		elseif modo == "escalar" then
-			-- manos hacia delante y abajo, empujando el borde
-			objetivo = cam:VectorToWorldSpace(Vector3.new(0.25 * l, -0.75, -1).Unit)
-			codo = 0.15
+			-- manos delante y abajo, apoyadas en el borde
+			mano = Vector3.new(0.6 * l, -0.5, -1.9)
+			codo = Vector3.new(1.0 * l, -1.2, -0.9)
+			rapidez = 24
 		elseif rodando then
-			objetivo = cam:VectorToWorldSpace(Vector3.new(0.3 * l, -1, 0.3).Unit)
-			codo = 1.6
+			mano = Vector3.new(0.4 * l, -1.6, -1.0)
+			rapidez = 20
 		else
+			-- correr: las manos van y vienen
 			local fase = estado.bob + (l == 1 and math.pi or 0)
-			local d = Vector3.new(0.18 * l, -0.42, -1)
-			d += Vector3.new(math.cos(fase) * 0.08 * l, 0, math.sin(fase) * 0.22) * andar -- brazos que van y vienen al correr
-			d += Vector3.new(estado.sway.X, estado.sway.Y, 0)
+			mano += Vector3.new(0, math.abs(math.sin(fase)) * -0.06, math.sin(fase) * 0.25) * andar
+			mano += Vector3.new(estado.sway.X, estado.sway.Y, 0)
 			if enSlide then
-				d += Vector3.new(0.7 * l, -0.1, 0.4) -- se abren para equilibrarse
-				codo = 0.25
+				mano = Vector3.new(1.4 * l, -0.7, -1.2) -- abiertas para equilibrarse
 			end
 			if not enSuelo then
-				d += Vector3.new(0.15 * l, 0.3, 0)
+				mano += Vector3.new(0.1 * l, 0.15, 0)
 			end
-			d += Vector3.new(0, 0.4, 0) * estado.salto
-			d += Vector3.new(0, -0.35, 0) * estado.aterrizaje
-			-- corriendo por la pared, la mano de ese lado la toca
+			mano += Vector3.new(0, 0.2, 0) * estado.salto
+			mano += Vector3.new(0, -0.25, 0) * estado.aterrizaje
+			-- pared: la mano de ese lado se apoya en ella
 			if (pared > 0 and l == 1) or (pared < 0 and l == -1) then
-				d = Vector3.new(1.1 * l, 0.35, -0.6)
-				codo = 0.2
+				mano = Vector3.new(1.6 * l, -0.1, -1.4)
+				codo = Vector3.new(1.3 * l, -1.4, -0.3)
 			end
-			-- manotazo con la derecha
+			-- manotazo: la derecha cruza al centro con la palma abierta
 			if l == 1 and golpe > 0 then
-				d = d:Lerp(Vector3.new(-0.15, -0.05, -1), golpe)
-				codo = lerp(codo, 0.05, golpe)
+				mano = mano:Lerp(Vector3.new(0.1, -0.35, -2.3), golpe)
+				giro = golpe * math.rad(80)
+				rapidez = 60
 			elseif l == -1 then
-				d += Vector3.new(0, -0.15, 0.2) * golpe
+				mano += Vector3.new(0, -0.2, 0.2) * golpe
 			end
-			objetivo = cam:VectorToWorldSpace(d.Unit)
 		end
 
-		-- suavizado (el manotazo va rápido)
-		local rapidez = golpe > 0.05 and 40 or (modo == "barra" and 20 or 14)
-		b.dir = b.dir:Lerp(objetivo, math.min(dt * rapidez, 1))
-		if b.dir.Magnitude < 0.01 then
-			b.dir = objetivo
-		end
-		b.dir = b.dir.Unit
-		b.codo = lerp(b.codo, codo, math.min(dt * rapidez, 1))
+		local k = math.min(dt * rapidez, 1)
+		b.posMano = b.posMano:Lerp(mano, k)
+		b.posCodo = b.posCodo:Lerp(codo, k)
+		b.giro = lerp(b.giro, giro, k)
 
-		-- cadena hombro → codo → mano
+		local pMano = cam:PointToWorldSpace(b.posMano)
+		local pCodo = cam:PointToWorldSpace(b.posCodo)
 		local lateral = cam.RightVector
-		local ejeCodo = unitLateral(lateral, -b.dir)
-		local punto = hombro
-		for i, p in b.piezas do
-			local dir = b.dir
-			if i >= 2 then
-				-- el antebrazo y la mano se doblan hacia arriba/dentro
-				dir = girar(b.dir, ejeCodo, b.codo)
-			end
-			punto = colocar(p, punto, dir, b.largos[i], lateral)
-		end
+		entre(b.antebrazo, pCodo, pMano, lateral, b.giro)
 	end
 end
 
@@ -1570,6 +1553,31 @@ local function muroCercano()
 	return mejor
 end
 
+-- Mientras escalas o cuelgas de una barra, el script mueve el cuerpo a mano.
+-- Se pone el Humanoid en estado "Physics" (no hace nada por su cuenta) y el cuerpo
+-- se mantiene siempre derecho mirando hacia donde mira la cámara, así la vista no gira.
+local function cuerpoManual(activar)
+	if activar then
+		humanoid.AutoRotate = false
+		humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+		linVel.Enabled = false
+	else
+		humanoid.AutoRotate = true
+		humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+		linVel.Enabled = true
+	end
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function ponerCuerpo(pos)
+	local mirar = flat(camera.CFrame.LookVector)
+	if mirar.Magnitude < 0.01 then
+		mirar = flat(root.CFrame.LookVector)
+	end
+	root.CFrame = CFrame.lookAt(pos, pos + mirar.Unit)
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
 ------------------------------------------------------------------------
 -- Escalar bordes
 ------------------------------------------------------------------------
@@ -1646,8 +1654,7 @@ local function agarrarBarra(b, vel, now)
 	s.modo = "barra"
 	s.wallrun = nil
 	s.sliding = false
-	linVel.Enabled = false
-	humanoid.PlatformStand = true
+	cuerpoManual(true)
 end
 
 local function soltarBarra(conImpulso, now)
@@ -1655,13 +1662,19 @@ local function soltarBarra(conImpulso, now)
 	s.barra = nil
 	s.modo = "normal"
 	s.barraSoltadaAt = now
-	linVel.Enabled = true
-	humanoid.PlatformStand = false
-	humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+	cuerpoManual(false)
 	local tangente = b.frente * math.cos(b.theta) + UP * math.sin(b.theta)
 	local v = tangente * (b.omega * C.BARRA_RADIO)
 	if conImpulso then
-		v = v * C.BARRA_IMPULSO + UP * C.BARRA_SALTO_EXTRA
+		-- salir lanzado: lo que lleves de balanceo, más un empujón hacia arriba y
+		-- hacia donde miras (así siempre sirve, aunque no te hayas balanceado)
+		local mirar = flat(camera.CFrame.LookVector)
+		mirar = mirar.Magnitude > 0.01 and mirar.Unit or b.frente
+		local h = flat(v) * C.BARRA_IMPULSO
+		if h:Dot(mirar) < C.WALK_SPEED then
+			h = mirar * math.max(h:Dot(mirar), C.WALK_SPEED) + (h - mirar * h:Dot(mirar)) * 0.5
+		end
+		v = Vector3.new(h.X, math.max(v.Y, 0) + C.BARRA_SALTO_EXTRA, h.Z)
 		sumarCombo(now)
 		s.fovPunch = C.FOV_GOLPE
 	end
@@ -1699,9 +1712,7 @@ local function pasoBarra(dt, now)
 	end
 
 	local pos = b.punto + (b.frente * math.sin(b.theta) - UP * math.cos(b.theta)) * C.BARRA_RADIO
-	local mirar = flat(camera.CFrame.LookVector)
-	local giro = mirar.Magnitude > 0.01 and CFrame.lookAt(Vector3.zero, mirar) or CFrame.identity
-	root.CFrame = CFrame.new(pos) * giro
+	ponerCuerpo(pos)
 	local tangente = b.frente * math.cos(b.theta) + UP * math.sin(b.theta)
 	root.AssemblyLinearVelocity = tangente * (b.omega * C.BARRA_RADIO)
 	s.speed = math.abs(b.omega * C.BARRA_RADIO)
@@ -1764,14 +1775,14 @@ local function step(dt)
 			e.desde.Y + (e.hasta.Y - e.desde.Y) * subida,
 			e.desde.Z + (e.hasta.Z - e.desde.Z) * avance
 		)
-		root.CFrame = CFrame.new(pos) * (root.CFrame - root.CFrame.Position)
+		ponerCuerpo(pos)
 		root.AssemblyLinearVelocity = Vector3.zero
 		linVel.VectorVelocity = Vector3.zero
 		if t >= 1 then
 			s.modo = "normal"
 			s.escalar = nil
-			humanoid.PlatformStand = false
-			linVel.Enabled = true
+			cuerpoManual(false)
+			humanoid:ChangeState(Enum.HumanoidStateType.Running)
 			linVel.VectorVelocity = e.salida
 			root.AssemblyLinearVelocity = e.salida
 			s.lastGroundedAt = now
@@ -1890,8 +1901,7 @@ local function step(dt)
 				}
 				s.modo = "escalar"
 				s.wallrun = nil
-				humanoid.PlatformStand = true
-				linVel.Enabled = false
+				cuerpoManual(true)
 				sumarCombo(now)
 				publicar(true)
 				return
@@ -2018,11 +2028,6 @@ local function cameraStep(dt)
 		camera.CFrame *= CFrame.Angles(-e * math.pi * 2, 0, 0)
 	end
 
-	-- escalando: la cámara se inclina hacia el borde
-	if s.modo == "escalar" and s.escalar then
-		local t = math.clamp((now - s.escalar.inicio) / s.escalar.duracion, 0, 1)
-		camera.CFrame *= CFrame.Angles(-math.sin(t * math.pi) * math.rad(10), 0, 0)
-	end
 
 	s.landDip += (0 - s.landDip) * math.min(dt * 10, 1)
 	local drop = (s.sliding and C.SLIDE_CAMERA_DROP or 0) + s.landDip + (now < s.rodandoHasta and 1.5 or 0)
@@ -2042,19 +2047,21 @@ hud.Parent = player:WaitForChild("PlayerGui")
 
 local speedLabel = Instance.new("TextLabel")
 speedLabel.AnchorPoint = Vector2.new(0.5, 1)
-speedLabel.Position = UDim2.new(0.5, 0, 1, -24)
+speedLabel.Position = UDim2.new(0.5, 0, 0.5, 70)
 speedLabel.Size = UDim2.fromOffset(200, 30)
 speedLabel.BackgroundTransparency = 1
 speedLabel.Font = Enum.Font.GothamBold
-speedLabel.TextSize = 22
+speedLabel.TextSize = 16
+speedLabel.TextTransparency = 0.3
 speedLabel.TextColor3 = Color3.new(1, 1, 1)
 speedLabel.TextStrokeTransparency = 0.6
 speedLabel.Parent = hud
 
 local comboLabel = speedLabel:Clone()
-comboLabel.Position = UDim2.new(0.5, 0, 1, -52)
+comboLabel.Position = UDim2.new(0.5, 0, 0.5, 98)
 comboLabel.TextSize = 18
 comboLabel.TextColor3 = Color3.fromRGB(255, 214, 236)
+comboLabel.Text = ""
 comboLabel.Parent = hud
 
 local crosshair = Instance.new("Frame")
@@ -2153,11 +2160,8 @@ ReplicatedStorage:WaitForChild("Remotos"):WaitForChild("Empujon").OnClientEvent:
 	elseif s.modo == "escalar" then
 		s.modo = "normal"
 		s.escalar = nil
-		if humanoid then
-			humanoid.PlatformStand = false
-		end
-		if linVel then
-			linVel.Enabled = true
+		if humanoid and linVel then
+			cuerpoManual(false)
 		end
 	end
 	s.empujePendiente = vector
@@ -2230,6 +2234,7 @@ local function texto(props)
 	t.Font = Enum.Font.GothamBlack
 	t.TextColor3 = Color3.new(1, 1, 1)
 	t.TextStrokeTransparency = 0.4
+	t.Text = ""
 	for k, v in props do
 		t[k] = v
 	end

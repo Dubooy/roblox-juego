@@ -11,27 +11,27 @@ return {
 	GRAVITY = 196.2,
 
 	-- Suelo
-	WALK_SPEED = 20, -- velocidad normal corriendo
-	GROUND_ACCEL = 9, -- más = arranca antes
+	WALK_SPEED = 26, -- velocidad normal corriendo
+	GROUND_ACCEL = 12, -- más = arranca antes
 	GROUND_FRICTION = 7, -- frenado al soltar las teclas
 	STOP_SPEED = 10,
-	INERCIA_PERDIDA = 9, -- studs/s que pierdes cada segundo corriendo por encima de WALK_SPEED
-	INERCIA_GIRO = 3, -- lo rápido que giras cuando llevas inercia (bajo = más peso)
+	INERCIA_PERDIDA = 6, -- studs/s que pierdes cada segundo corriendo por encima de WALK_SPEED
+	INERCIA_GIRO = 4, -- lo rápido que giras cuando llevas inercia (bajo = más peso)
 
 	-- Aire
-	AIR_ACCEL = 20,
+	AIR_ACCEL = 24,
 	AIR_WISH_CAP = 3, -- poco control en el aire: el salto se decide antes de saltar
-	AIR_STEER = 1.2,
+	AIR_STEER = 1.6,
 
-	MAX_SPEED = 52, -- tope de velocidad horizontal
+	MAX_SPEED = 72, -- tope de velocidad horizontal
 
 	-- Salto (solo desde el suelo; en el aire solo se salta apoyándose en un muro)
-	JUMP_VELOCITY = 52,
+	JUMP_VELOCITY = 58,
 	COYOTE_TIME = 0.12, -- puedes saltar un instante después de salir de un borde
 	JUMP_BUFFER = 0.15, -- si pulsas justo antes de tocar suelo, salta al aterrizar
 
 	-- Slide
-	SLIDE_MIN_START = 16, -- velocidad mínima para empezar a deslizar
+	SLIDE_MIN_START = 18, -- velocidad mínima para empezar a deslizar
 	SLIDE_FRICTION = 0.12, -- rozamiento en llano (bajo = deslizas más lejos)
 	SLIDE_MIN_SPEED = 9, -- por debajo, el slide termina
 	SLIDE_STEER = 1.0,
@@ -40,7 +40,7 @@ return {
 
 	-- Pared: correr por ella y saltar de pared a pared
 	WALLRUN_DISTANCIA = 3, -- studs hasta la pared a cada lado
-	WALLRUN_VEL_MIN = 15,
+	WALLRUN_VEL_MIN = 18,
 	WALLRUN_DURACION = 1.4, -- segundos máximos en la misma pared
 	WALLRUN_SUBIDA_INICIAL = 8, -- al engancharte subes un poco
 	WALLRUN_GRAVEDAD = 22, -- caída suave mientras corres
@@ -48,14 +48,14 @@ return {
 	WALLRUN_INCLINACION = 12, -- grados de inclinación de cámara
 	MURO_SALTO_DISTANCIA = 3.2, -- distancia a un muro para poder saltar de él sin correr por él
 	MURO_SALTO_FUERA = 26, -- empuje hacia fuera del muro
-	MURO_SALTO_ARRIBA = 48,
-	MURO_SALTO_BONUS = 4, -- velocidad que GANAS en cada salto de pared encadenado
+	MURO_SALTO_ARRIBA = 52,
+	MURO_SALTO_BONUS = 5, -- velocidad que GANAS en cada salto de pared encadenado
 
 	-- Escalar bordes
 	ESCALAR_ALTURA_MIN = 2.2, -- por debajo es un escalón: se sube andando
 	ESCALAR_ALTURA_MAX = 8, -- altura máxima del borde respecto a tus pies
 	ESCALAR_ALCANCE = 2.6, -- distancia a la pared para agarrarte
-	ESCALAR_DURACION = 0.38,
+	ESCALAR_DURACION = 0.3,
 	ESCALAR_CONSERVA = 0.75, -- parte de la velocidad que conservas al terminar de subir
 
 	-- Barras (columpiarse)
@@ -63,8 +63,8 @@ return {
 	BARRA_RADIO = 3.6, -- distancia de la barra a tu cuerpo colgado
 	BARRA_BOMBEO = 3.2, -- impulso al pulsar W/S en el sentido del balanceo
 	BARRA_AMORTIGUA = 0.12, -- pérdida de balanceo por segundo
-	BARRA_IMPULSO = 1.25, -- multiplicador de velocidad al soltarte saltando
-	BARRA_SALTO_EXTRA = 12, -- empujón hacia arriba al soltarte
+	BARRA_IMPULSO = 1.3, -- multiplicador de velocidad al soltarte saltando
+	BARRA_SALTO_EXTRA = 42, -- empujón hacia arriba al soltarte saltando
 	BARRA_ESPERA = 0.35, -- tras soltarte, tiempo antes de poder agarrar otra
 
 	-- Aterrizaje: rodar o golpe
@@ -81,14 +81,16 @@ return {
 	-- Cámara
 	FOV_BASE = 75,
 	FOV_MAX_EXTRA = 14, -- FOV extra a máxima velocidad
-	FOV_SPEED_FOR_MAX = 50,
+	FOV_SPEED_FOR_MAX = 70,
 	FOV_GOLPE = 6,
 	ROLL_MAX = 2.5, -- grados de inclinación al moverte de lado
 	LAND_DIP_MAX = 1.6, -- golpe de cámara al aterrizar
 
-	-- Brazos (copia de los de tu avatar pegada a la cámara)
-	BRAZOS_ESCALA = 0.7, -- tamaño respecto a los brazos reales
-	BRAZOS_HOMBRO = Vector3.new(1.05, -1.25, 0.35), -- dónde está el hombro respecto a la cámara (x derecha, y arriba, z atrás)
+	-- Brazos (estilo Roblox clásico con tu piel y tu camiseta, entrando desde abajo)
+	-- Posiciones respecto a la cámara: x derecha, y arriba, z hacia atrás (negativo = delante)
+	BRAZOS_ESCALA = 0.75,
+	BRAZOS_MANO = Vector3.new(1.05, -1.2, -2.5), -- dónde queda la mano en reposo (lado derecho)
+	BRAZOS_CODO = Vector3.new(1.6, -2.2, -1.3), -- de dónde sale el brazo (fuera de la pantalla)
 
 	-- Servidor (anti-trampas básico)
 	SERVER_SPEED_TOLERANCE = 1.35,

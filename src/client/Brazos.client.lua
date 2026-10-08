@@ -1,13 +1,11 @@
--- Brazos en primera persona (viewmodel).
+-- Brazos en primera persona (viewmodel), al estilo de los shooters de Roblox:
+-- el antebrazo y la mano de TU avatar (copiados, con tu piel y tu camiseta) entran
+-- desde la parte de abajo de la pantalla.
 --
--- Se hace una COPIA de los brazos de tu avatar (con tu piel, tu camiseta y sus mallas)
--- y se pega a la cámara. Es como lo hacen los shooters de Roblox: no depende del
--- cuerpo de verdad, que en primera persona Roblox esconde.
---
--- Cada brazo es una cadena hombro → codo → mano que apunta hacia donde toque según lo
--- que estés haciendo (lo publica Movimiento.client.lua en atributos Mov*):
+-- Cada brazo se coloca entre dos puntos relativos a la cámara: el CODO (fuera de la
+-- pantalla, abajo) y la MANO. Según lo que hagas, la mano se mueve a otro sitio:
 -- correr, slide, pared, barra, escalar, rodar, salto, aterrizaje y manotazo.
--- Funciona con avatares R15 y R6.
+-- Funciona con avatares R15 (antebrazo + mano) y R6 (brazo entero).
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -20,7 +18,7 @@ local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 local modelo
-local brazos = {} -- [lado] = { piezas = {Part...}, largos = {number...}, dir = Vector3, codo = number }
+local brazos = {} -- [lado] = { antebrazo, mano (o nil en R6), mano = Vector3, codo = Vector3 }
 
 local estado = {
 	bob = 0,
@@ -29,11 +27,6 @@ local estado = {
 	salto = 0,
 	aterrizaje = 0,
 	estabaEnSuelo = true,
-}
-
-local PIEZAS = {
-	R15 = { [1] = { "RightUpperArm", "RightLowerArm", "RightHand" }, [-1] = { "LeftUpperArm", "LeftLowerArm", "LeftHand" } },
-	R6 = { [1] = { "Right Arm" }, [-1] = { "Left Arm" } },
 }
 
 local function construir()
@@ -47,54 +40,63 @@ local function construir()
 	if not hum then
 		return
 	end
-	local tipo = hum.RigType == Enum.HumanoidRigType.R15 and "R15" or "R6"
 
+	-- Brazos de estilo Roblox clásico con TU color de piel y TU camiseta:
+	-- con un Humanoid R6 dentro, Roblox pinta la camiseta en las piezas "Right Arm"/"Left Arm".
+	-- (Las mallas de los avatares R15 tienen formas y orientaciones muy distintas y
+	-- en primera persona quedaban deformes.)
 	modelo = Instance.new("Model")
 	modelo.Name = "BrazosVista"
-	-- con un Humanoid dentro, Roblox pinta la camiseta y los colores del cuerpo
 	local h = Instance.new("Humanoid")
+	h.RigType = Enum.HumanoidRigType.R6
 	h.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 	h.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
 	h.RequiresNeck = false
-	h.BreakJointsOnDeath = false
 	h.EvaluateStateMachine = false
 	h.Parent = modelo
-	for _, nombre in { "Shirt", "BodyColors" } do
-		local v = char:FindFirstChildOfClass(nombre)
-		if v then
-			v:Clone().Parent = modelo
-		end
+	local camiseta = char:FindFirstChildOfClass("Shirt")
+	if camiseta then
+		camiseta:Clone().Parent = modelo
+	end
+
+	-- color de piel: el de los brazos de verdad
+	local function colorDe(lado)
+		local nombre = lado == 1 and "Right" or "Left"
+		local p = char:FindFirstChild(nombre .. "Hand") or char:FindFirstChild(nombre .. " Arm") or char:FindFirstChild(nombre .. "LowerArm")
+		return p and p.Color or Color3.fromRGB(234, 184, 146)
 	end
 
 	for _, lado in { 1, -1 } do
-		local piezas, largos = {}, {}
-		for _, nombre in PIEZAS[tipo][lado] do
-			local original = char:FindFirstChild(nombre)
-			if original then
-				local p = original:Clone()
-				-- quitar uniones y extras; se quedan la malla y las texturas
-				for _, hijo in p:GetChildren() do
-					if not (hijo:IsA("DataModelMesh") or hijo:IsA("Decal") or hijo:IsA("SurfaceAppearance")) then
-						hijo:Destroy()
-					end
-				end
-				p.Size = original.Size * C.BRAZOS_ESCALA
-				p.Anchored = true
-				p.CanCollide = false
-				p.CanQuery = false
-				p.CanTouch = false
-				p.CastShadow = false
-				p.Massless = true
-				p.LocalTransparencyModifier = 0
-				p.Transparency = 0
-				p.Parent = modelo
-				table.insert(piezas, p)
-				table.insert(largos, p.Size.Y)
-			end
+		local p = Instance.new("Part")
+		p.Name = lado == 1 and "Right Arm" or "Left Arm"
+		p.Size = Vector3.new(1, 2, 1) * C.BRAZOS_ESCALA
+		p.Color = colorDe(lado)
+		p.Material = Enum.Material.SmoothPlastic
+		p.TopSurface = Enum.SurfaceType.Smooth
+		p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.CastShadow = false
+		p.Parent = modelo
+		brazos[lado] = {
+			antebrazo = p,
+			posMano = Vector3.new(C.BRAZOS_MANO.X * lado, C.BRAZOS_MANO.Y, C.BRAZOS_MANO.Z),
+			posCodo = Vector3.new(C.BRAZOS_CODO.X * lado, C.BRAZOS_CODO.Y, C.BRAZOS_CODO.Z),
+			giro = 0,
+		}
+	end
+	-- sin camiseta: manga del color del torso
+	if not camiseta then
+		local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+		local bc = Instance.new("BodyColors")
+		bc.RightArmColor3 = brazos[1].antebrazo.Color
+		bc.LeftArmColor3 = brazos[-1].antebrazo.Color
+		if torso then
+			bc.TorsoColor3 = torso.Color
 		end
-		if #piezas > 0 then
-			brazos[lado] = { piezas = piezas, largos = largos, dir = Vector3.new(0, -0.4, -1).Unit, codo = 0.4 }
-		end
+		bc.Parent = modelo
 	end
 	modelo.Parent = camera
 end
@@ -103,37 +105,28 @@ local function lerp(a, b, t)
 	return a + (b - a) * t
 end
 
--- vector "lateral" hecho perpendicular a "abajo"
-local function unitLateral(lateral, abajo)
-	local d = lateral - abajo * lateral:Dot(abajo)
-	if d.Magnitude < 0.01 then
-		d = abajo:Cross(Vector3.zAxis)
+-- Coloca una pieza entre a y b (en el mundo), con su -Y mirando de a hacia b.
+-- "giro" rota la pieza sobre su eje (para poner la mano de canto en el manotazo).
+local function entre(p, a, b, lateral, giro)
+	local dir = b - a
+	if dir.Magnitude < 0.01 then
+		return
 	end
-	return d.Unit
-end
-
--- coloca una pieza para que vaya de "desde" en dirección "dir" (su -Y apunta en dir)
-local function colocar(p, desde, dir, largo, lateral)
-	local abajo = -dir
-	local derecha = unitLateral(lateral, abajo)
+	local abajo = -dir.Unit
+	local derecha = lateral - abajo * lateral:Dot(abajo)
+	derecha = derecha.Magnitude > 0.01 and derecha.Unit or abajo:Cross(Vector3.zAxis).Unit
 	local atras = derecha:Cross(abajo)
-	p.CFrame = CFrame.fromMatrix(desde + dir * (largo / 2), derecha, abajo, atras)
-	return desde + dir * largo
-end
-
--- gira "v" un ángulo alrededor de "eje"
-local function girar(v, eje, ang)
-	return CFrame.fromAxisAngle(eje, ang):VectorToWorldSpace(v)
+	p.CFrame = CFrame.fromMatrix((a + b) / 2, derecha, abajo, atras) * CFrame.Angles(0, giro, 0)
 end
 
 local function actualizar(dt)
+	if not modelo then
+		return
+	end
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local cabeza = char and char:FindFirstChild("Head")
 	local visible = hum and hum.Health > 0 and cabeza and (camera.CFrame.Position - cabeza.Position).Magnitude < 2.5
-	if not modelo then
-		return
-	end
 	modelo.Parent = visible and camera or nil
 	if not visible then
 		return
@@ -149,13 +142,11 @@ local function actualizar(dt)
 	local rodando = player:GetAttribute("MovRodando") == true
 	local ultimoSalto = player:GetAttribute("MovUltimoSalto") or -math.huge
 
-	-- balanceo al correr
-	local andar = (enSuelo and not enSlide and modo == "normal") and math.clamp(vel / 20, 0, 1.3) or 0
-	estado.bob += dt * (4 + vel * 0.28) * (andar > 0.05 and 1 or 0)
+	local andar = (enSuelo and not enSlide and modo == "normal") and math.clamp(vel / C.WALK_SPEED, 0, 1.4) or 0
+	estado.bob += dt * (5 + vel * 0.25) * (andar > 0.05 and 1 or 0)
 
-	-- retraso al girar la vista
 	local delta = UserInputService:GetMouseDelta()
-	estado.sway = estado.sway:Lerp(Vector2.new(math.clamp(-delta.X * 0.005, -0.2, 0.2), math.clamp(delta.Y * 0.005, -0.2, 0.2)), math.min(dt * 8, 1))
+	estado.sway = estado.sway:Lerp(Vector2.new(math.clamp(-delta.X * 0.004, -0.15, 0.15), math.clamp(delta.Y * 0.004, -0.15, 0.15)), math.min(dt * 8, 1))
 
 	if ultimoSalto ~= estado.ultimoSalto then
 		estado.ultimoSalto = ultimoSalto
@@ -168,84 +159,73 @@ local function actualizar(dt)
 	estado.estabaEnSuelo = enSuelo
 	estado.aterrizaje = lerp(estado.aterrizaje, 0, math.min(dt * 9, 1))
 
-	-- manotazo: 0 → 1 → 0 en ~0,3 s
 	local tm = now - (player:GetAttribute("MovManotazo") or -math.huge)
 	local golpe = 0
-	if tm < 0.08 then
-		golpe = tm / 0.08
-	elseif tm < 0.32 then
-		golpe = (1 - (tm - 0.08) / 0.24) ^ 2
+	if tm < 0.07 then
+		golpe = tm / 0.07
+	elseif tm < 0.3 then
+		golpe = (1 - (tm - 0.07) / 0.23) ^ 2
 	end
 
 	local cam = camera.CFrame
 	for lado, b in brazos do
 		local l = lado
-		local hombro = cam:PointToWorldSpace(Vector3.new(C.BRAZOS_HOMBRO.X * l, C.BRAZOS_HOMBRO.Y, C.BRAZOS_HOMBRO.Z))
-		local objetivo -- dirección en el mundo
-		local codo = 0.45 -- radianes de doblez
+		local reposo = Vector3.new(C.BRAZOS_MANO.X * l, C.BRAZOS_MANO.Y, C.BRAZOS_MANO.Z)
+		local codoReposo = Vector3.new(C.BRAZOS_CODO.X * l, C.BRAZOS_CODO.Y, C.BRAZOS_CODO.Z)
+		local mano, codo, giro = reposo, codoReposo, 0
+		local rapidez = 14
 
 		if modo == "barra" and typeof(barra) == "Vector3" then
-			-- las dos manos a la barra, brazos estirados
-			local agarre = barra + cam.RightVector * 0.7 * l
-			objetivo = (agarre - hombro).Unit
-			codo = 0.05
+			-- manos arriba agarrando la barra
+			local agarre = cam:PointToObjectSpace(barra + cam.RightVector * 0.8 * l)
+			mano = agarre
+			codo = Vector3.new(0.9 * l, -0.6, -0.2)
+			rapidez = 22
 		elseif modo == "escalar" then
-			-- manos hacia delante y abajo, empujando el borde
-			objetivo = cam:VectorToWorldSpace(Vector3.new(0.25 * l, -0.75, -1).Unit)
-			codo = 0.15
+			-- manos delante y abajo, apoyadas en el borde
+			mano = Vector3.new(0.6 * l, -0.5, -1.9)
+			codo = Vector3.new(1.0 * l, -1.2, -0.9)
+			rapidez = 24
 		elseif rodando then
-			objetivo = cam:VectorToWorldSpace(Vector3.new(0.3 * l, -1, 0.3).Unit)
-			codo = 1.6
+			mano = Vector3.new(0.4 * l, -1.6, -1.0)
+			rapidez = 20
 		else
+			-- correr: las manos van y vienen
 			local fase = estado.bob + (l == 1 and math.pi or 0)
-			local d = Vector3.new(0.18 * l, -0.42, -1)
-			d += Vector3.new(math.cos(fase) * 0.08 * l, 0, math.sin(fase) * 0.22) * andar -- brazos que van y vienen al correr
-			d += Vector3.new(estado.sway.X, estado.sway.Y, 0)
+			mano += Vector3.new(0, math.abs(math.sin(fase)) * -0.06, math.sin(fase) * 0.25) * andar
+			mano += Vector3.new(estado.sway.X, estado.sway.Y, 0)
 			if enSlide then
-				d += Vector3.new(0.7 * l, -0.1, 0.4) -- se abren para equilibrarse
-				codo = 0.25
+				mano = Vector3.new(1.4 * l, -0.7, -1.2) -- abiertas para equilibrarse
 			end
 			if not enSuelo then
-				d += Vector3.new(0.15 * l, 0.3, 0)
+				mano += Vector3.new(0.1 * l, 0.15, 0)
 			end
-			d += Vector3.new(0, 0.4, 0) * estado.salto
-			d += Vector3.new(0, -0.35, 0) * estado.aterrizaje
-			-- corriendo por la pared, la mano de ese lado la toca
+			mano += Vector3.new(0, 0.2, 0) * estado.salto
+			mano += Vector3.new(0, -0.25, 0) * estado.aterrizaje
+			-- pared: la mano de ese lado se apoya en ella
 			if (pared > 0 and l == 1) or (pared < 0 and l == -1) then
-				d = Vector3.new(1.1 * l, 0.35, -0.6)
-				codo = 0.2
+				mano = Vector3.new(1.6 * l, -0.1, -1.4)
+				codo = Vector3.new(1.3 * l, -1.4, -0.3)
 			end
-			-- manotazo con la derecha
+			-- manotazo: la derecha cruza al centro con la palma abierta
 			if l == 1 and golpe > 0 then
-				d = d:Lerp(Vector3.new(-0.15, -0.05, -1), golpe)
-				codo = lerp(codo, 0.05, golpe)
+				mano = mano:Lerp(Vector3.new(0.1, -0.35, -2.3), golpe)
+				giro = golpe * math.rad(80)
+				rapidez = 60
 			elseif l == -1 then
-				d += Vector3.new(0, -0.15, 0.2) * golpe
+				mano += Vector3.new(0, -0.2, 0.2) * golpe
 			end
-			objetivo = cam:VectorToWorldSpace(d.Unit)
 		end
 
-		-- suavizado (el manotazo va rápido)
-		local rapidez = golpe > 0.05 and 40 or (modo == "barra" and 20 or 14)
-		b.dir = b.dir:Lerp(objetivo, math.min(dt * rapidez, 1))
-		if b.dir.Magnitude < 0.01 then
-			b.dir = objetivo
-		end
-		b.dir = b.dir.Unit
-		b.codo = lerp(b.codo, codo, math.min(dt * rapidez, 1))
+		local k = math.min(dt * rapidez, 1)
+		b.posMano = b.posMano:Lerp(mano, k)
+		b.posCodo = b.posCodo:Lerp(codo, k)
+		b.giro = lerp(b.giro, giro, k)
 
-		-- cadena hombro → codo → mano
+		local pMano = cam:PointToWorldSpace(b.posMano)
+		local pCodo = cam:PointToWorldSpace(b.posCodo)
 		local lateral = cam.RightVector
-		local ejeCodo = unitLateral(lateral, -b.dir)
-		local punto = hombro
-		for i, p in b.piezas do
-			local dir = b.dir
-			if i >= 2 then
-				-- el antebrazo y la mano se doblan hacia arriba/dentro
-				dir = girar(b.dir, ejeCodo, b.codo)
-			end
-			punto = colocar(p, punto, dir, b.largos[i], lateral)
-		end
+		entre(b.antebrazo, pCodo, pMano, lateral, b.giro)
 	end
 end
 

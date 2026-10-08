@@ -60,6 +60,7 @@ local function texto(props)
 	t.Font = Enum.Font.GothamBlack
 	t.TextColor3 = Color3.new(1, 1, 1)
 	t.TextStrokeTransparency = 0.4
+	t.Text = ""
 	for k, v in props do
 		t[k] = v
 	end

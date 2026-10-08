@@ -17,8 +17,8 @@ local Mapas = {}
 
 -- Paleta pastel
 local P = {
-	suelo = Color3.fromRGB(246, 238, 228), -- crema
-	sueloB = Color3.fromRGB(236, 226, 214),
+	suelo = Color3.fromRGB(214, 204, 222), -- lavanda grisácea (no deslumbra)
+	sueloB = Color3.fromRGB(204, 194, 214),
 	lila = Color3.fromRGB(205, 190, 238),
 	menta = Color3.fromRGB(178, 230, 210),
 	melocoton = Color3.fromRGB(255, 205, 178),
@@ -99,34 +99,35 @@ local function ambiente()
 		end
 	end
 	Lighting.ClockTime = 14.5
-	Lighting.Brightness = 2.2
+	Lighting.Brightness = 1.6
+	Lighting.ExposureCompensation = -0.35
 	Lighting.Ambient = Color3.fromRGB(150, 140, 165)
-	Lighting.OutdoorAmbient = Color3.fromRGB(190, 180, 205)
+	Lighting.OutdoorAmbient = Color3.fromRGB(150, 140, 170)
 	Lighting.EnvironmentDiffuseScale = 0.6
 	Lighting.EnvironmentSpecularScale = 0.2
 	Lighting.GlobalShadows = true
 	Lighting.ShadowSoftness = 0.6
 
 	local atm = Instance.new("Atmosphere")
-	atm.Density = 0.28
+	atm.Density = 0.2
 	atm.Offset = 0.1
 	atm.Color = Color3.fromRGB(255, 226, 236)
 	atm.Decay = Color3.fromRGB(200, 186, 230)
 	atm.Glare = 0.2
-	atm.Haze = 1.2
+	atm.Haze = 0.6
 	atm.Parent = Lighting
 
 	local cc = Instance.new("ColorCorrectionEffect")
-	cc.Brightness = 0.04
-	cc.Contrast = -0.05
+	cc.Brightness = 0
+	cc.Contrast = 0.05
 	cc.Saturation = -0.12
 	cc.TintColor = Color3.fromRGB(255, 248, 252)
 	cc.Parent = Lighting
 
 	local bloom = Instance.new("BloomEffect")
-	bloom.Intensity = 0.4
+	bloom.Intensity = 0.15
 	bloom.Size = 30
-	bloom.Threshold = 1.6
+	bloom.Threshold = 2.2
 	bloom.Parent = Lighting
 end
 
