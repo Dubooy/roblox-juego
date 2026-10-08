@@ -2,95 +2,124 @@
 -- cambia números y prueba (Play) sin tocar el resto del código.
 -- Velocidades en studs/segundo, tiempos en segundos.
 --
--- Idea del movimiento: ritmo medio y con peso (tipo Mirror's Edge). No hay dash ni
--- doble salto. La velocidad se gana con INERCIA encadenando mecánicas: salir de una
--- barra, saltar de pared a pared, rodar al aterrizar y deslizar cuesta abajo.
--- Corriendo normal la inercia se va perdiendo poco a poco.
+-- Movimiento estilo Parkour Reborn:
+--   · Corriendo en línea recta vas cogiendo FLUJO (velocidad) poco a poco.
+--   · Cada mecánica bien hecha (saltar vallas, trepar, correr por la pared, saltar de
+--     pared, slide, rodar, barras) te da un empujón y el flujo se mantiene si encadenas.
+--   · Pierdes flujo al pararte, al girar de golpe, al chocar contra una pared o al
+--     caer de alto sin rodar.
 
 return {
 	GRAVITY = 196.2,
 
-	-- Suelo
-	WALK_SPEED = 26, -- velocidad normal corriendo
-	GROUND_ACCEL = 12, -- más = arranca antes
-	GROUND_FRICTION = 7, -- frenado al soltar las teclas
+	-- Correr y flujo
+	RUN_BASE = 24, -- velocidad al empezar a correr
+	FLUJO_MAX = 42, -- velocidad a la que llegas corriendo recto un rato
+	FLUJO_GANA = 4.5, -- studs/s que ganas cada segundo corriendo recto
+	FLUJO_PIERDE_GIRO = 30, -- pérdida por segundo al girar muy cerrado
+	FLUJO_DECAE = 5, -- lo que bajas cada segundo si vas por encima de FLUJO_MAX (por empujones)
+	GROUND_ACCEL = 11, -- arrancar desde parado (más = antes)
+	GROUND_FRICTION = 9, -- frenado al soltar las teclas
 	STOP_SPEED = 10,
-	INERCIA_PERDIDA = 6, -- studs/s que pierdes cada segundo corriendo por encima de WALK_SPEED
-	INERCIA_GIRO = 4, -- lo rápido que giras cuando llevas inercia (bajo = más peso)
+	GIRO_SUELO = 7, -- lo rápido que giras corriendo despacio (a más velocidad, más peso)
+	ZANCADA = 6.5, -- studs por paso (para pasos, balanceo de cámara y brazos)
+
+	MAX_SPEED = 78, -- tope absoluto en horizontal
 
 	-- Aire
 	AIR_ACCEL = 24,
-	AIR_WISH_CAP = 3, -- poco control en el aire: el salto se decide antes de saltar
-	AIR_STEER = 1.6,
+	AIR_WISH_CAP = 3,
+	AIR_STEER = 1.8,
 
-	MAX_SPEED = 72, -- tope de velocidad horizontal
-
-	-- Salto (solo desde el suelo; en el aire solo se salta apoyándose en un muro)
+	-- Salto
 	JUMP_VELOCITY = 58,
-	COYOTE_TIME = 0.12, -- puedes saltar un instante después de salir de un borde
-	JUMP_BUFFER = 0.15, -- si pulsas justo antes de tocar suelo, salta al aterrizar
+	COYOTE_TIME = 0.12,
+	JUMP_BUFFER = 0.15,
+
+	-- Saltar vallas (obstáculos bajos: se saltan solos al correr hacia ellos)
+	VALLA_ALTURA_MIN = 1.3, -- por debajo es un escalón
+	VALLA_ALTURA_MAX = 4.3,
+	VALLA_VEL_MIN = 12,
+	VALLA_DURACION = 0.26,
+	VALLA_BONUS = 4,
+
+	-- Escalar bordes altos (salta hacia el borde y te agarras)
+	ESCALAR_ALTURA_MAX = 9.5, -- desde tus pies
+	ESCALAR_ALCANCE = 2.8,
+	ESCALAR_DURACION = 0.42,
+	ESCALAR_CONSERVA = 0.7, -- parte de la velocidad que conservas al subir
+
+	-- Trepar paredes (corre contra una pared y salta: subes corriendo por ella)
+	TREPAR_VEL = 44, -- velocidad de subida inicial
+	TREPAR_DURACION = 0.5,
+	TREPAR_DISTANCIA = 2.8,
+
+	-- Correr por la pared
+	WALLRUN_DISTANCIA = 3,
+	WALLRUN_VEL_MIN = 20,
+	WALLRUN_DURACION = 1.3,
+	WALLRUN_SUBIDA_INICIAL = 10,
+	WALLRUN_GRAVEDAD = 24,
+	WALLRUN_CAIDA_MAX = 12,
+	WALLRUN_BONUS = 3, -- empujón al engancharte
+	WALLRUN_INCLINACION = 10,
+
+	-- Saltar desde un muro (en el aire, pegado a una pared)
+	MURO_SALTO_DISTANCIA = 3.2,
+	MURO_SALTO_FUERA = 28,
+	MURO_SALTO_ARRIBA = 54,
+	MURO_SALTO_BONUS = 5,
 
 	-- Slide
-	SLIDE_MIN_START = 18, -- velocidad mínima para empezar a deslizar
-	SLIDE_FRICTION = 0.12, -- rozamiento en llano (bajo = deslizas más lejos)
-	SLIDE_MIN_SPEED = 9, -- por debajo, el slide termina
+	SLIDE_MIN_START = 18,
+	SLIDE_BOOST = 8, -- empujón al empezar
+	SLIDE_BOOST_ESPERA = 1.2, -- para que no se pueda encadenar sin parar
+	SLIDE_FRICTION = 0.12,
+	SLIDE_MIN_SPEED = 12,
 	SLIDE_STEER = 1.0,
-	SLIDE_CUESTA = 1.15, -- cuánto acelera deslizar cuesta abajo (1 = gravedad real)
-	SLIDE_CAMERA_DROP = 1.6,
-
-	-- Pared: correr por ella y saltar de pared a pared
-	WALLRUN_DISTANCIA = 3, -- studs hasta la pared a cada lado
-	WALLRUN_VEL_MIN = 18,
-	WALLRUN_DURACION = 1.4, -- segundos máximos en la misma pared
-	WALLRUN_SUBIDA_INICIAL = 8, -- al engancharte subes un poco
-	WALLRUN_GRAVEDAD = 22, -- caída suave mientras corres
-	WALLRUN_CAIDA_MAX = 12,
-	WALLRUN_INCLINACION = 12, -- grados de inclinación de cámara
-	MURO_SALTO_DISTANCIA = 3.2, -- distancia a un muro para poder saltar de él sin correr por él
-	MURO_SALTO_FUERA = 26, -- empuje hacia fuera del muro
-	MURO_SALTO_ARRIBA = 52,
-	MURO_SALTO_BONUS = 5, -- velocidad que GANAS en cada salto de pared encadenado
-
-	-- Escalar bordes
-	ESCALAR_ALTURA_MIN = 2.2, -- por debajo es un escalón: se sube andando
-	ESCALAR_ALTURA_MAX = 8, -- altura máxima del borde respecto a tus pies
-	ESCALAR_ALCANCE = 2.6, -- distancia a la pared para agarrarte
-	ESCALAR_DURACION = 0.3,
-	ESCALAR_CONSERVA = 0.75, -- parte de la velocidad que conservas al terminar de subir
+	SLIDE_CUESTA = 1.2, -- aceleración cuesta abajo (1 = gravedad real)
+	SLIDE_SALTO_BONUS = 3,
+	SLIDE_CAMERA_DROP = 1.7,
 
 	-- Barras (columpiarse)
-	BARRA_AGARRE = 2.8, -- distancia de tus manos a la barra para agarrarte
-	BARRA_RADIO = 3.6, -- distancia de la barra a tu cuerpo colgado
-	BARRA_BOMBEO = 3.2, -- impulso al pulsar W/S en el sentido del balanceo
-	BARRA_AMORTIGUA = 0.12, -- pérdida de balanceo por segundo
-	BARRA_IMPULSO = 1.3, -- multiplicador de velocidad al soltarte saltando
-	BARRA_SALTO_EXTRA = 42, -- empujón hacia arriba al soltarte saltando
-	BARRA_ESPERA = 0.35, -- tras soltarte, tiempo antes de poder agarrar otra
+	BARRA_AGARRE = 2.8,
+	BARRA_RADIO = 3.6,
+	BARRA_BOMBEO = 3.2,
+	BARRA_AMORTIGUA = 0.12,
+	BARRA_IMPULSO = 1.3,
+	BARRA_SALTO_EXTRA = 42,
+	BARRA_ESPERA = 0.35,
 
-	-- Aterrizaje: rodar o golpe
-	CAIDA_FUERTE = 70, -- velocidad de caída a partir de la que el aterrizaje cuenta
+	-- Aterrizaje
+	CAIDA_FUERTE = 78, -- a partir de esta velocidad de caída hay que rodar
 	RODAR_VENTANA = 0.3, -- pulsa slide como mucho este tiempo antes de tocar suelo
-	RODAR_BONUS = 5, -- velocidad que ganas al rodar bien
-	RODAR_DURACION = 0.45,
-	GOLPE_FRENO = 0.35, -- si no ruedas te quedas con esta parte de la velocidad
+	RODAR_BONUS = 6,
+	RODAR_DURACION = 0.5,
+	GOLPE_FRENO = 0.45,
 	GOLPE_ATURDIDO = 0.3,
 
-	-- Combo: mecánicas encadenadas sin pararse (para las cinemáticas épicas)
-	COMBO_CADUCA = 0.8, -- segundos andando normal antes de que el combo se pierda
+	-- Combo (para las cinemáticas épicas)
+	COMBO_CADUCA = 0.8,
 
 	-- Cámara
-	FOV_BASE = 75,
-	FOV_MAX_EXTRA = 14, -- FOV extra a máxima velocidad
+	FOV_BASE = 74,
+	FOV_MAX_EXTRA = 16,
 	FOV_SPEED_FOR_MAX = 70,
-	FOV_GOLPE = 6,
-	ROLL_MAX = 2.5, -- grados de inclinación al moverte de lado
-	LAND_DIP_MAX = 1.6, -- golpe de cámara al aterrizar
+	FOV_GOLPE = 5,
+	ROLL_MAX = 2,
+	LAND_DIP_MAX = 1.8,
+	BALANCEO_CAMARA = 0.14, -- cuánto sube y baja la cámara al correr
+
+	-- Sonido
+	VOLUMEN = 0.6,
 
 	-- Brazos (estilo Roblox clásico con tu piel y tu camiseta, entrando desde abajo)
 	-- Posiciones respecto a la cámara: x derecha, y arriba, z hacia atrás (negativo = delante)
 	BRAZOS_ESCALA = 0.75,
-	BRAZOS_MANO = Vector3.new(1.05, -1.2, -2.5), -- dónde queda la mano en reposo (lado derecho)
-	BRAZOS_CODO = Vector3.new(1.6, -2.2, -1.3), -- de dónde sale el brazo (fuera de la pantalla)
+	BRAZOS_MANO = Vector3.new(0.95, -1.15, -2.3), -- mano derecha en reposo
+	BRAZOS_HOMBRO = Vector3.new(1.35, -1.6, -0.4), -- de dónde sale el brazo (fuera de la pantalla)
+	BRAZOS_MUELLE = 170, -- rigidez del muelle (más = siguen antes a su sitio)
+	BRAZOS_AMORTIGUA = 0.62, -- 1 = sin rebote; menos = rebotan un poco (peso)
 
 	-- Servidor (anti-trampas básico)
 	SERVER_SPEED_TOLERANCE = 1.35,

@@ -99,12 +99,12 @@ local function ambiente()
 		end
 	end
 	Lighting.ClockTime = 14.5
-	Lighting.Brightness = 1.6
-	Lighting.ExposureCompensation = -0.35
+	Lighting.Brightness = 2
+	Lighting.ExposureCompensation = -0.2
 	Lighting.Ambient = Color3.fromRGB(150, 140, 165)
 	Lighting.OutdoorAmbient = Color3.fromRGB(150, 140, 170)
-	Lighting.EnvironmentDiffuseScale = 0.6
-	Lighting.EnvironmentSpecularScale = 0.2
+	Lighting.EnvironmentDiffuseScale = 0.8
+	Lighting.EnvironmentSpecularScale = 0 -- sin reflejos: todo mate
 	Lighting.GlobalShadows = true
 	Lighting.ShadowSoftness = 0.6
 
@@ -125,7 +125,7 @@ local function ambiente()
 	cc.Parent = Lighting
 
 	local bloom = Instance.new("BloomEffect")
-	bloom.Intensity = 0.15
+	bloom.Intensity = 0
 	bloom.Size = 30
 	bloom.Threshold = 2.2
 	bloom.Parent = Lighting
@@ -152,16 +152,27 @@ local function pista(raiz)
 			bloque(m, Vector3.new(40, 2, 40), Vector3.new(i * 40 + 20, -1, j * 40 + 20), (i + j) % 2 == 0 and P.suelo or P.sueloB)
 		end
 	end
-	-- valla baja alrededor
-	for _, v in { { Vector3.new(0, 2, 120), Vector3.new(322, 4, 2) }, { Vector3.new(0, 2, -120), Vector3.new(322, 4, 2) }, { Vector3.new(160, 2, 0), Vector3.new(2, 4, 242) }, { Vector3.new(-160, 2, 0), Vector3.new(2, 4, 242) } } do
+	-- muro alrededor (alto, para no salirse y para correr por él)
+	for _, v in { { Vector3.new(0, 8, 120), Vector3.new(322, 16, 2) }, { Vector3.new(0, 8, -120), Vector3.new(322, 16, 2) }, { Vector3.new(160, 8, 0), Vector3.new(2, 16, 242) }, { Vector3.new(-160, 8, 0), Vector3.new(2, 16, 242) } } do
 		bloque(m, v[2], v[1], P.lila)
 	end
 
-	-- 1. BORDES PARA ESCALAR (alturas 3, 5 y 7)
-	letrero(m, Vector3.new(-120, 12, -90), "Escalar bordes")
-	for i, h in { 3, 5, 7 } do
+	-- 1. BORDES PARA ESCALAR (salta hacia ellos): alturas 5, 7 y 9
+	letrero(m, Vector3.new(-120, 14, -90), "Salta hacia el borde para escalar")
+	for i, h in { 5, 7, 9 } do
 		bloque(m, Vector3.new(14, h, 14), Vector3.new(-140 + i * 16, h / 2, -90), ({ P.melocoton, P.rosa, P.lila })[i])
 	end
+
+	-- 1b. VALLAS (corre hacia ellas: se saltan solas sin frenar)
+	letrero(m, Vector3.new(-80, 10, -40), "Vallas: corre hacia ellas")
+	for i, h in { 2, 3, 4, 2.5, 3.5 } do
+		bloque(m, Vector3.new(10, h, 2), Vector3.new(-130 + i * 18, h / 2, -40), i % 2 == 0 and P.menta or P.melocoton)
+	end
+
+	-- 1c. TREPAR (corre contra la pared y salta). La baja (11) se sube; en la alta (20) salta otra vez para impulsarte atrás
+	letrero(m, Vector3.new(30, 26, -40), "Trepar: corre contra la pared y salta")
+	bloque(m, Vector3.new(16, 11, 10), Vector3.new(20, 5.5, -48), P.rosa)
+	bloque(m, Vector3.new(16, 20, 4), Vector3.new(44, 10, -50), P.cielo)
 
 	-- 2. PASILLO DE PAREDES (correr por la pared)
 	letrero(m, Vector3.new(-40, 22, -90), "Correr por la pared")

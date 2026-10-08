@@ -13,6 +13,8 @@ def script(path):
     return item(cls, name, extra=f'<ProtectedString name="Source"><![CDATA[{src(path)}]]></ProtectedString>')
 def todos(d): return ''.join(script(p) for p in sorted(glob.glob(f'src/{d}/*.lua')))
 x = '<roblox version="4">' + item('Workspace', 'Workspace')
+# Iluminación con sombras suaves (no se puede cambiar desde un script)
+x += item('Lighting', 'Lighting', extra='<token name="Technology">3</token>')
 x += item('ReplicatedStorage', 'ReplicatedStorage', item('Folder', 'Shared', todos('shared')))
 x += item('ServerScriptService', 'ServerScriptService', todos('server'))
 x += item('StarterPlayer', 'StarterPlayer', item('StarterPlayerScripts', 'StarterPlayerScripts', todos('client')), '<token name="CameraMode">1</token>')

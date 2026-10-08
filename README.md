@@ -3,22 +3,24 @@
 Movimiento fluido en primera persona con dash, slide, doble salto, coyote time, buffer de
 salto y bunny-hop, más un mapa de pruebas que se construye solo al pulsar **Play**.
 
-## Controles (fase 1: movimiento nuevo)
+## Controles (movimiento de parkour, estilo Parkour Reborn)
 
-| Acción | Teclado | Mando |
-|---|---|---|
-| Moverse | WASD | stick izquierdo |
-| Saltar (solo desde el suelo) | Espacio | A |
-| Saltar desde un muro (en el aire, cerca de una pared) | Espacio | A |
-| Correr por la pared | ve rápido, salta en paralelo a una pared y mantén W | |
-| Escalar un borde | empuja hacia el borde al llegar saltando | |
-| Barra | salta hacia ella: te agarras solo. W/S para balancearte, Espacio para salir lanzado, slide para soltarte | |
-| Slide (mantener) | Ctrl, C o Shift | B |
-| Rodar al caer de alto | pulsa slide justo antes de tocar el suelo | B |
-| Manotazo | clic izquierdo o E | R2 |
+| Acción | Cómo |
+|---|---|
+| Correr | WASD. Corriendo recto vas cogiendo velocidad (flujo) |
+| Saltar | Espacio (solo desde el suelo o apoyándote en un muro) |
+| Saltar vallas | corre hacia un obstáculo bajo: se salta solo sin frenar |
+| Escalar un borde | salta hacia él empujando hacia delante |
+| Trepar una pared | corre contra ella y pulsa saltar. Otra vez saltar = impulso hacia atrás |
+| Correr por la pared | salta en paralelo a una pared yendo rápido y mantén W |
+| Saltar desde un muro | en el aire, junto a una pared, pulsa saltar |
+| Slide | Ctrl, C o Shift corriendo. Cuesta abajo acelera |
+| Barras | salta hacia una. W/S balancea, Espacio te lanza, slide te suelta |
+| Rodar | al caer de alto, pulsa slide justo antes de tocar el suelo |
+| Manotazo | clic izquierdo o E |
 
-No hay dash ni doble salto: la velocidad se gana con inercia (barras, saltos de pared,
-rodar y deslizar cuesta abajo) y se pierde poco a poco corriendo normal.
+Cada mecánica bien hecha te da un empujón de velocidad. Lo pierdes al pararte, al girar
+de golpe, al chocar contra una pared o al caer de alto sin rodar.
 
 ## Modo Contagio
 Uno empieza pillando (se queda quieto unos segundos para daros ventaja). Cada jugador al que da un
