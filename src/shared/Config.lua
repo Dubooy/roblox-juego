@@ -146,7 +146,7 @@ return {
 	EMPUJE_SIN_LIMITE = 0.5, -- segundos en que el empujado puede superar la velocidad máxima
 
 	-- Partida
-	SOLO_MOVIMIENTO = true, -- fase 1: sin rondas ni bots, para probar el movimiento tranquilo
+	SOLO_MOVIMIENTO = false, -- true = sin rondas ni bots, solo la pista de pruebas
 	MODO_INICIAL = "Contagio", -- más adelante se elegirá en el lobby
 	JUGADORES_MINIMOS = 2, -- cuentan los bots
 	PREPARACION = 8,
@@ -156,6 +156,6 @@ return {
 
 	-- Bots
 	PARTICIPANTES_OBJETIVO = 6, -- se rellenan con bots hasta este número
-	BOT_VELOCIDAD = 22,
+	BOT_VELOCIDAD = 26,
 	BOT_PIENSA_CADA = 0.35,
 }

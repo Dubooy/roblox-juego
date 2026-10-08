@@ -23,6 +23,16 @@ salto y bunny-hop, más un mapa de pruebas que se construye solo al pulsar **Pla
 Cada mecánica bien hecha te da un empujón de velocidad. Lo pierdes al pararte, al girar
 de golpe, al chocar contra una pared o al caer de alto sin rodar.
 
+## Mapas
+- **Parque de calistenia**: circuito en forma de 8 alrededor de una estructura de barras
+  (con un tobogán larguísimo desde 30 de altura) y de un bloque de cajas de parkour.
+  Rectas con pasillos de paredes para correr por ellas y bancos para saltar.
+- **Torre de obras**: edificio de 4 plantas abiertas con rampas, andamio con barras,
+  pluma de la grúa inclinada para bajar deslizando hasta el edificio pequeño,
+  tobogán de escombros y contenedores.
+- **Pista de pruebas**: en el centro, donde apareces entre rondas. Con
+  `SOLO_MOVIMIENTO = true` en `Config.lua` se juega solo en ella, sin rondas ni bots.
+
 ## Modo Contagio
 Uno empieza pillando (se queda quieto unos segundos para daros ventaja). Cada jugador al que da un
 manotazo pasa a pillar. Si al acabar el tiempo queda alguien sin pillar, ganan los que huyen.
