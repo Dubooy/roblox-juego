@@ -136,14 +136,31 @@ return {
 	-- Servidor (anti-trampas básico)
 	SERVER_SPEED_TOLERANCE = 1.35,
 
-	-- Manotazo (en la fase 3 llegan el congelado y las cinemáticas)
+	-- Manotazo
 	MANOTAZO_ALCANCE = 8,
 	MANOTAZO_ANGULO = 0.45, -- producto escalar mínimo con la vista (0.45 ≈ 63°)
 	MANOTAZO_ESPERA = 0.7,
 	MANOTAZO_EMPUJE = 45,
 	MANOTAZO_EMPUJE_ARRIBA = 30,
 	MANOTAZO_EMPUJE_EXTRA_VEL = 0.3,
-	EMPUJE_SIN_LIMITE = 0.5, -- segundos en que el empujado puede superar la velocidad máxima
+	EMPUJE_SIN_LIMITE = 0.8, -- segundos en que el empujado puede superar la velocidad máxima
+
+	-- Pillar: todo se congela un instante para los dos y luego el pillado sale volando
+	CONGELADO_GOLPE = 0.08, -- empujón sin pillar
+	CONGELADO_PILLAR = 0.18, -- al pillar
+	PILLADO_EMPUJE_EXTRA = 1.25, -- el pillado sale más lejos que en un empujón normal
+
+	-- Pillado épico: cinemática de 3 planos (~3 s). Hacen falta EPICO_CONDICIONES de:
+	-- pillar en el aire, ir a EPICO_VELOCIDAD o más, o llevar un combo de EPICO_COMBO.
+	-- El último superviviente siempre es épico y lo ve todo el mundo.
+	EPICO_CONDICIONES = 2,
+	EPICO_VELOCIDAD = 45,
+	EPICO_COMBO = 3,
+	EPICO_EMPUJE_EXTRA = 1.35,
+	CINE_PLANO1 = 0.8, -- impacto casi congelado, en blanco y negro
+	CINE_PLANO2 = 1.2, -- giro alrededor a cámara lenta
+	CINE_PLANO3 = 1.0, -- desde abajo, el pillado volando con su nombre
+	CINE_DURACION = 3.0, -- suma de los tres (los dos implicados son intocables mientras)
 
 	-- Partida
 	SOLO_MOVIMIENTO = false, -- true = sin rondas ni bots, solo la pista de pruebas

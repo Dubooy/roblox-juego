@@ -23,6 +23,15 @@ salto y bunny-hop, más un mapa de pruebas que se construye solo al pulsar **Pla
 Cada mecánica bien hecha te da un empujón de velocidad. Lo pierdes al pararte, al girar
 de golpe, al chocar contra una pared o al caer de alto sin rodar.
 
+## Pillar
+- Al pillar, todo se congela un instante para los dos (destello y blanco y negro) y luego
+  el pillado sale volando con una estela.
+- **Pillado épico**: si se cumplen dos de estas (pillar en el aire, ir a 45 o más, llevar
+  un combo de 3), salta una cinemática de 3 planos (~3 s): impacto casi congelado, giro
+  alrededor a cámara lenta y el pillado volando visto desde abajo con su nombre. La ven
+  los dos implicados, que son intocables mientras. El **último superviviente** siempre
+  es épico y lo ve todo el mundo. Luego se sigue jugando.
+
 ## Mapas
 - **Parque de calistenia**: circuito en forma de 8 alrededor de una estructura de barras
   (con un tobogán larguísimo desde 30 de altura) y de un bloque de cajas de parkour.

@@ -37,7 +37,9 @@ end
 
 local Manotazo = remoto("Manotazo") -- cliente → servidor: dirección de la vista
 local Empujon = remoto("Empujon") -- servidor → golpeado: vector de empujón
-local Golpe = remoto("Golpe") -- servidor → todos: (modelo atacante, modelo golpeado) para efectos
+local Golpe = remoto("Golpe") -- servidor → todos: (modelo atacante, modelo golpeado, congelado) para efectos
+local Congelar = remoto("Congelar") -- servidor → atacante: quedarse congelado (segundos)
+local Cinematica = remoto("Cinematica") -- servidor → quien la ve: (atacante, golpeado, dirección, texto, motivo)
 
 ------------------------------------------------------------------------
 -- Participantes (jugadores y bots)
@@ -187,12 +189,69 @@ local enJuego = {} -- [participante] = true durante la ronda
 local modoActual = nil
 local faseJugando = false
 
-local function golpear(atacante, vista)
+local function activos()
+	local lista = {}
+	for p in enJuego do
+		if (p:IsA("Player") and p.Parent == Players) or (not p:IsA("Player") and p.Parent) then
+			table.insert(lista, p)
+		end
+	end
+	return lista
+end
+
+local inmuneHasta = {} -- [participante] = os.clock(): en plena cinemática nadie le puede tocar
+
+local function enElAire(p)
+	local m = modeloDe(p)
+	local hum = m and m:FindFirstChildOfClass("Humanoid")
+	return hum ~= nil and hum.FloorMaterial == Enum.Material.Air
+end
+
+local function velocidadPlana(p)
+	local r = raiz(p)
+	if not r then
+		return 0
+	end
+	local v = r.AssemblyLinearVelocity
+	return Vector3.new(v.X, 0, v.Z).Magnitude
+end
+
+-- Congela a un participante "segundos" y después (si hay empuje) lo lanza.
+local function congelarYLanzar(p, segundos, empuje)
+	if p:IsA("Player") then
+		if empuje then
+			Empujon:FireClient(p, empuje, segundos)
+		else
+			Congelar:FireClient(p, segundos)
+		end
+	else
+		local r = raiz(p)
+		if not r then
+			return
+		end
+		r.Anchored = true
+		p:SetAttribute("AturdidoHasta", os.clock() + segundos + 0.6)
+		task.delay(segundos, function()
+			if r.Parent then
+				r.Anchored = false
+				if empuje then
+					Bots.empujar(p, empuje)
+				end
+			end
+		end)
+	end
+end
+
+-- infoCliente: { combo } que manda el jugador (para saber si venía encadenando)
+local function golpear(atacante, vista, infoCliente)
 	if typeof(vista) ~= "Vector3" or vista.Magnitude < 0.5 then
 		return
 	end
 	local ahora = os.clock()
 	if ahora - (ultimoManotazo[atacante] or -math.huge) < C.MANOTAZO_ESPERA * 0.8 then
+		return
+	end
+	if (inmuneHasta[atacante] or 0) > ahora then
 		return
 	end
 	ultimoManotazo[atacante] = ahora
@@ -206,7 +265,7 @@ local function golpear(atacante, vista)
 	-- el participante más cercano delante del atacante (con margen por la latencia)
 	local mejor, mejorDist = nil, math.huge
 	for _, otro in participantes() do
-		if otro ~= atacante then
+		if otro ~= atacante and (inmuneHasta[otro] or 0) <= ahora then
 			local ro = raiz(otro)
 			if ro then
 				local d = ro.Position - r.Position
@@ -221,28 +280,85 @@ local function golpear(atacante, vista)
 		return
 	end
 
+	-- ¿Cuenta como pillado? (solo en ronda y si el modo lo dice)
+	local aviso = nil
+	if faseJugando and modoActual and enJuego[atacante] and enJuego[mejor] then
+		aviso = modoActual.alGolpear(atacante, mejor)
+	end
+
+	-- ¿Es épico? Hacen falta C.EPICO_CONDICIONES de: en el aire, muy rápido, tras un combo.
+	-- El último pillado de la ronda siempre es épico (y lo ve todo el mundo).
+	local epico, paraTodos, motivo = false, false, nil
+	if aviso then
+		local combo = (typeof(infoCliente) == "table" and tonumber(infoCliente.combo)) or 0
+		local condiciones = {}
+		if enElAire(atacante) or enElAire(mejor) then
+			table.insert(condiciones, "¡EN EL AIRE!")
+		end
+		if velocidadPlana(atacante) >= C.EPICO_VELOCIDAD then
+			table.insert(condiciones, "¡A TODA VELOCIDAD!")
+		end
+		if combo >= C.EPICO_COMBO then
+			table.insert(condiciones, "¡COMBO x" .. math.floor(combo) .. "!")
+		end
+		local ultimo = modoActual.terminada(activos())
+		if ultimo then
+			epico, paraTodos, motivo = true, true, "¡ÚLTIMO SUPERVIVIENTE!"
+		elseif #condiciones >= C.EPICO_CONDICIONES then
+			epico, motivo = true, table.concat(condiciones, "  ")
+		end
+	end
+
+	-- empujón: hacia donde miras, con una parte de tu velocidad (más fuerte si es épico)
 	local plano = Vector3.new(vista.X, 0, vista.Z)
 	if plano.Magnitude < 0.1 then
 		local d = raiz(mejor).Position - r.Position
 		plano = Vector3.new(d.X, 0, d.Z)
 	end
 	plano = plano.Unit
-	local velAtacante = Vector3.new(r.AssemblyLinearVelocity.X, 0, r.AssemblyLinearVelocity.Z).Magnitude
-	local fuerza = C.MANOTAZO_EMPUJE + velAtacante * C.MANOTAZO_EMPUJE_EXTRA_VEL
-	local empuje = plano * fuerza + Vector3.new(0, C.MANOTAZO_EMPUJE_ARRIBA, 0)
-
-	if mejor:IsA("Player") then
-		Empujon:FireClient(mejor, empuje)
-	else
-		Bots.empujar(mejor, empuje)
+	local fuerza = C.MANOTAZO_EMPUJE + velocidadPlana(atacante) * C.MANOTAZO_EMPUJE_EXTRA_VEL
+	local arriba = C.MANOTAZO_EMPUJE_ARRIBA
+	if aviso then
+		fuerza *= C.PILLADO_EMPUJE_EXTRA
+		arriba *= C.PILLADO_EMPUJE_EXTRA
 	end
-	Golpe:FireAllClients(modeloDe(atacante), modeloDe(mejor))
+	if epico then
+		fuerza *= C.EPICO_EMPUJE_EXTRA
+		arriba *= C.EPICO_EMPUJE_EXTRA
+	end
+	local empuje = plano * fuerza + Vector3.new(0, arriba, 0)
 
-	if faseJugando and modoActual and enJuego[atacante] and enJuego[mejor] then
-		local aviso = modoActual.alGolpear(atacante, mejor)
-		if aviso then
-			ReplicatedStorage:SetAttribute("Mensaje", aviso)
+	-- congelado: un instante en un golpe normal; en uno épico, el pillado espera al primer
+	-- plano de la cinemática y el que pilla se queda quieto toda la cinemática
+	local congeladoVictima = aviso and C.CONGELADO_PILLAR or C.CONGELADO_GOLPE
+	local congeladoAtacante = congeladoVictima
+	if epico then
+		congeladoVictima = C.CINE_PLANO1
+		congeladoAtacante = C.CINE_DURACION
+		inmuneHasta[atacante] = ahora + C.CINE_DURACION
+		inmuneHasta[mejor] = ahora + C.CINE_DURACION
+	end
+	congelarYLanzar(mejor, congeladoVictima, empuje)
+	congelarYLanzar(atacante, congeladoAtacante, nil)
+
+	Golpe:FireAllClients(modeloDe(atacante), modeloDe(mejor), congeladoVictima, aviso ~= nil)
+
+	if epico then
+		local texto = "¡" .. string.upper(nombreDe(mejor)) .. " PILLADO!"
+		local args = { modeloDe(atacante), modeloDe(mejor), plano, texto, motivo or "" }
+		if paraTodos then
+			Cinematica:FireAllClients(table.unpack(args))
+		else
+			for _, p in { atacante, mejor } do
+				if p:IsA("Player") then
+					Cinematica:FireClient(p, table.unpack(args))
+				end
+			end
 		end
+	end
+
+	if aviso then
+		ReplicatedStorage:SetAttribute("Mensaje", aviso)
 	end
 end
 
@@ -277,6 +393,7 @@ Players.PlayerAdded:Connect(ajustarBots)
 Players.PlayerRemoving:Connect(function(p)
 	enJuego[p] = nil
 	ultimoManotazo[p] = nil
+	inmuneHasta[p] = nil
 	task.defer(ajustarBots)
 end)
 ajustarBots()
@@ -336,15 +453,6 @@ local function anclar(lista, anclado)
 	end
 end
 
-local function activos()
-	local lista = {}
-	for p in enJuego do
-		if (p:IsA("Player") and p.Parent == Players) or (not p:IsA("Player") and p.Parent) then
-			table.insert(lista, p)
-		end
-	end
-	return lista
-end
 
 ReplicatedStorage:SetAttribute("Modo", C.MODO_INICIAL)
 ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)

@@ -78,6 +78,7 @@ local function resetState()
 
 	s.empujePendiente = nil
 	s.empujeHasta = -math.huge
+	s.congeladoHasta = nil
 
 	s.paso = 0
 	s.pasoAnterior = 0
@@ -514,6 +515,19 @@ local function step(dt)
 	end
 	dt = math.min(dt, 1 / 20)
 	local now = os.clock()
+
+	-- Congelado (al pillar o ser pillado): el cuerpo se queda clavado en el sitio.
+	-- Al acabar, se aplica el empujón que haya pendiente.
+	if s.congeladoHasta then
+		if now < s.congeladoHasta then
+			root.Anchored = true
+			linVel.VectorVelocity = Vector3.zero
+			publicar(s.wasGrounded)
+			return
+		end
+		s.congeladoHasta = nil
+		root.Anchored = false
+	end
 
 	if s.combo > 0 and s.wasGrounded and not s.sliding and now - s.comboUltimoAt > C.COMBO_CADUCA then
 		s.combo = 0
@@ -952,7 +966,7 @@ local function nivelarVista(dt, rapidez)
 end
 
 local function cameraStep(dt)
-	if not humanoid then
+	if not humanoid or player:GetAttribute("EnCinematica") then
 		return
 	end
 	local now = os.clock()
@@ -1173,10 +1187,23 @@ if player.Character then
 	task.spawn(onCharacter, player.Character)
 end
 
-ReplicatedStorage:WaitForChild("Remotos"):WaitForChild("Empujon").OnClientEvent:Connect(function(vector)
+local remotos = ReplicatedStorage:WaitForChild("Remotos")
+
+local function congelar(segundos)
+	if typeof(segundos) ~= "number" or segundos <= 0 or not humanoid then
+		return
+	end
+	s.congeladoHasta = math.max(s.congeladoHasta or 0, os.clock() + math.min(segundos, 5))
+	s.fovPunch = -C.FOV_GOLPE -- la imagen "se encoge" un instante
+end
+
+remotos:WaitForChild("Congelar").OnClientEvent:Connect(congelar)
+
+remotos:WaitForChild("Empujon").OnClientEvent:Connect(function(vector, segundos)
 	if typeof(vector) ~= "Vector3" or not humanoid then
 		return
 	end
+	congelar(segundos)
 	if s.modo == "barra" and s.barra then
 		soltarBarra(false, os.clock())
 	elseif s.modo == "valla" or s.modo == "escalar" then
