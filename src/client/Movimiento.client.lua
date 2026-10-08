@@ -220,9 +220,13 @@ local function sumarCombo(now)
 end
 
 -- empujón: sube la velocidad y el flujo
+-- Cuanto más rápido vas, menos te da cada empujón (al tope casi nada): así llegar
+-- al máximo cuesta encadenar bien muchas mecánicas.
 local function empujon(horiz, extra, dirAlternativa)
 	local dir = unitOr(horiz, dirAlternativa or mirarPlano())
-	local rapidez = math.min(math.max(horiz.Magnitude, C.RUN_BASE) + extra, C.MAX_SPEED)
+	local base = math.max(horiz.Magnitude, C.RUN_BASE)
+	local margen = math.clamp((C.MAX_SPEED - base) / (C.MAX_SPEED - C.RUN_BASE), 0, 1)
+	local rapidez = math.min(base + extra * margen ^ C.EMPUJON_CURVA, C.MAX_SPEED)
 	s.flujo = math.max(s.flujo, math.min(rapidez, C.MAX_SPEED))
 	s.fovPunch = math.max(s.fovPunch, C.FOV_GOLPE * 0.6)
 	return dir * rapidez
@@ -241,9 +245,14 @@ end
 local function paredLateral(adelante)
 	local derecha = adelante:Cross(UP)
 	for _, lado in { 1, -1 } do
-		local hit = paredEn(derecha * lado, C.WALLRUN_DISTANCIA)
-		if hit then
-			return hit.Normal, lado, hit.Position
+		-- justo de lado y en diagonal hacia delante (así se detectan paredes que no son paralelas del todo)
+		for _, dir in { derecha * lado, (derecha * lado + adelante * 0.6).Unit, (derecha * lado - adelante * 0.4).Unit } do
+			for _, y in { 0, -1.2 } do
+				local hit = paredEn(dir, C.WALLRUN_DISTANCIA, y)
+				if hit and math.abs(flat(hit.Normal).Unit:Dot(adelante)) < 0.75 then
+					return flat(hit.Normal).Unit, lado, hit.Position
+				end
+			end
 		end
 	end
 	return nil
@@ -279,7 +288,7 @@ local function deslizarParedes(horiz, dt)
 				n = n.Unit
 				local contra = -horiz:Dot(n)
 				if contra > 0 then
-					if contra / rapidez > 0.75 then
+					if contra / rapidez > 0.92 then
 						deFrente = true
 					end
 					horiz += n * contra
@@ -583,8 +592,13 @@ local function step(dt)
 					sumarCombo(now)
 					sonar("rodar", 1.1)
 				else
-					horiz *= C.GOLPE_FRENO
-					s.flujo = C.RUN_BASE
+					-- golpe: pierdes una parte de lo que llevas por encima de la base, no todo
+					local r = horiz.Magnitude
+					if r > C.RUN_BASE then
+						local nueva = C.RUN_BASE + (r - C.RUN_BASE) * (1 - C.GOLPE_PIERDE)
+						horiz = horiz.Unit * nueva
+						s.flujo = math.max(C.RUN_BASE, math.min(s.flujo, nueva))
+					end
 					s.aturdidoHasta = now + C.GOLPE_ATURDIDO
 					s.combo = 0
 					sonar("aterrizar", 0.8, 1)
@@ -650,7 +664,7 @@ local function step(dt)
 	if libreDeAnim and not grounded and wish.Magnitude > 0 and wish:Dot(adelante) > 0.4 then
 		local b = buscarBorde(adelante, C.ESCALAR_ALCANCE)
 		local manosY = root.Position.Y + 2.4
-		if b and b.cabe and b.altura > C.VALLA_ALTURA_MIN and b.cima.Y - manosY < 1.8 and b.cima.Y > root.Position.Y - 1 then
+		if b and b.cabe and b.altura > C.VALLA_ALTURA_MIN and b.cima.Y - manosY < C.ESCALAR_MANOS and b.cima.Y > root.Position.Y - 1.5 then
 			local destino = b.cima + b.dentro * 1.4 + Vector3.new(0, alturaPies() + 0.05, 0)
 			local salida = b.dentro * math.max(horiz.Magnitude * C.ESCALAR_CONSERVA, C.RUN_BASE * 0.7)
 			empezarAnim("escalar", destino, C.ESCALAR_DURACION * math.clamp((destino.Y - root.Position.Y) / 6, 0.6, 1.1), salida, b.borde, now)
@@ -694,8 +708,18 @@ local function step(dt)
 			end
 			grounded = false
 		else
+			-- en el aire de cara a una pared (sin haber trepado ya): trepar
+			local frente = not s.wallrun and not s.trepadoUsado and wish:Dot(adelante) > 0.5 and vy > -25 and paredEn(adelante, C.TREPAR_DISTANCIA, 0.5)
 			local n
-			if s.wallrun then
+			if frente then
+				local nf = flat(frente.Normal).Unit
+				s.trepar = { normal = nf, hasta = now + C.TREPAR_DURACION * 0.8, punto = frente.Position }
+				s.trepadoUsado = true
+				vy = saltar(C.TREPAR_VEL * 0.85, now)
+				horiz = -nf * 2
+				sumarCombo(now)
+				setY = true
+			elseif s.wallrun then
 				n = s.wallrun.normal
 			else
 				n = muroCercano()
@@ -786,14 +810,14 @@ local function step(dt)
 				local alineado = dir:Dot(wish)
 				local giro = C.GIRO_SUELO * math.clamp(C.RUN_BASE / rapidez, 0.35, 1)
 				horiz = steer(horiz, wish, giro, dt)
-				if alineado > 0.9 then
+				if alineado > 0.8 then
 					if s.flujo < C.FLUJO_MAX then
 						s.flujo = math.min(s.flujo + C.FLUJO_GANA * dt, C.FLUJO_MAX)
 					else
 						s.flujo = math.max(s.flujo - C.FLUJO_DECAE * dt, C.FLUJO_MAX)
 					end
 				else
-					s.flujo = math.max(s.flujo - C.FLUJO_PIERDE_GIRO * (1 - alineado) * dt, C.RUN_BASE)
+					s.flujo = math.max(s.flujo - C.FLUJO_PIERDE_GIRO * (0.8 - alineado) * dt, C.RUN_BASE)
 				end
 				-- frenar si pides ir hacia atrás
 				if alineado < -0.3 then
@@ -809,8 +833,9 @@ local function step(dt)
 				end
 			end
 		else
+			-- soltar las teclas: frenas, y el flujo baja poco a poco (no de golpe)
 			horiz = applyFriction(horiz, C.GROUND_FRICTION, dt)
-			s.flujo = C.RUN_BASE
+			s.flujo = math.max(C.RUN_BASE, math.min(s.flujo - C.FLUJO_SOLTAR * dt, math.max(horiz.Magnitude, C.RUN_BASE)))
 		end
 	elseif not s.trepar then
 		-- ¿Correr por la pared?
@@ -861,7 +886,7 @@ local function step(dt)
 		horiz, deFrente = deslizarParedes(horiz, dt)
 		if deFrente and grounded and s.speed > C.RUN_BASE + 4 and now - s.golpeParedAt > 0.5 then
 			s.golpeParedAt = now
-			s.flujo = C.RUN_BASE
+			s.flujo = math.max(C.RUN_BASE, C.RUN_BASE + (s.flujo - C.RUN_BASE) * (1 - C.CHOQUE_PIERDE))
 			s.landDip = 0.6
 			sonar("aterrizar", 1.3, 0.4)
 		end
@@ -972,8 +997,9 @@ local function cameraStep(dt)
 	-- voltereta al rodar
 	local tr = (now - s.rodarInicio) / C.RODAR_DURACION
 	if tr >= 0 and tr < 1 then
-		local e = tr < 0.5 and 2 * tr * tr or 1 - (-2 * tr + 2) ^ 2 / 2
-		aplicarOffset(CFrame.Angles(-e * math.pi * 2, 0, 0))
+		-- amortiguar la caída: la cabeza se inclina hacia delante y vuelve
+		local curva = math.sin(math.min(tr * 1.4, 1) * math.pi)
+		aplicarOffset(CFrame.Angles(-curva * math.rad(28), 0, curva * math.rad(6)))
 	end
 
 	-- escalar: la cabeza baja un poco al empujar el borde
@@ -983,7 +1009,8 @@ local function cameraStep(dt)
 	end
 
 	s.landDip += (0 - s.landDip) * math.min(dt * 9, 1)
-	local drop = (s.sliding and C.SLIDE_CAMERA_DROP or 0) + s.landDip + ((tr >= 0 and tr < 1) and 1.6 or 0)
+	local agachado = (tr >= 0 and tr < 1) and math.sin(tr * math.pi) * 1.8 or 0
+	local drop = (s.sliding and C.SLIDE_CAMERA_DROP or 0) + s.landDip + agachado
 	local current = humanoid.CameraOffset.Y
 	humanoid.CameraOffset = Vector3.new(0, current + (-drop - current) * math.min(dt * 14, 1), 0)
 
@@ -1016,7 +1043,7 @@ hud.Parent = player:WaitForChild("PlayerGui")
 
 local speedLabel = Instance.new("TextLabel")
 speedLabel.AnchorPoint = Vector2.new(0.5, 0)
-speedLabel.Position = UDim2.new(0.5, 0, 0.5, 60)
+speedLabel.Position = UDim2.new(0.5, 0, 0.5, 58)
 speedLabel.Size = UDim2.fromOffset(200, 20)
 speedLabel.BackgroundTransparency = 1
 speedLabel.Font = Enum.Font.GothamBold
@@ -1028,7 +1055,7 @@ speedLabel.Text = ""
 speedLabel.Parent = hud
 
 local comboLabel = speedLabel:Clone()
-comboLabel.Position = UDim2.new(0.5, 0, 0.5, 80)
+comboLabel.Position = UDim2.new(0.5, 0, 0.5, 76)
 comboLabel.TextColor3 = Color3.fromRGB(255, 214, 236)
 comboLabel.Parent = hud
 
@@ -1042,7 +1069,31 @@ crosshair.BorderSizePixel = 0
 crosshair.Parent = hud
 Instance.new("UICorner", crosshair).CornerRadius = UDim.new(1, 0)
 
+-- medidor de inercia: barrita fina bajo la mira (vacía = velocidad base, llena = tope)
+local barraFondo = Instance.new("Frame")
+barraFondo.AnchorPoint = Vector2.new(0.5, 0)
+barraFondo.Position = UDim2.new(0.5, 0, 0.5, 50)
+barraFondo.Size = UDim2.fromOffset(120, 4)
+barraFondo.BackgroundColor3 = Color3.new(1, 1, 1)
+barraFondo.BackgroundTransparency = 0.75
+barraFondo.BorderSizePixel = 0
+barraFondo.Parent = hud
+Instance.new("UICorner", barraFondo).CornerRadius = UDim.new(1, 0)
+local barraRelleno = Instance.new("Frame")
+barraRelleno.Size = UDim2.fromScale(0, 1)
+barraRelleno.BackgroundColor3 = Color3.fromRGB(255, 200, 225)
+barraRelleno.BorderSizePixel = 0
+barraRelleno.Parent = barraFondo
+Instance.new("UICorner", barraRelleno).CornerRadius = UDim.new(1, 0)
+local rellenoVisto = 0
+
 local function hudStep()
+	local objetivo = math.clamp((s.speed - C.RUN_BASE) / (C.MAX_SPEED - C.RUN_BASE), 0, 1)
+	rellenoVisto += (objetivo - rellenoVisto) * 0.2
+	barraRelleno.Size = UDim2.fromScale(rellenoVisto, 1)
+	-- la marca de "flujo corriendo" se nota porque la barra cambia de color al pasarla
+	local pasado = s.speed > C.FLUJO_MAX + 1
+	barraRelleno.BackgroundColor3 = pasado and Color3.fromRGB(255, 150, 200) or Color3.fromRGB(255, 220, 235)
 	speedLabel.Text = string.format("%d", math.floor(s.speed + 0.5))
 	comboLabel.Text = s.combo >= 2 and ("x" .. s.combo) or ""
 end

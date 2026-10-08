@@ -14,17 +14,20 @@ return {
 
 	-- Correr y flujo
 	RUN_BASE = 24, -- velocidad al empezar a correr
-	FLUJO_MAX = 42, -- velocidad a la que llegas corriendo recto un rato
-	FLUJO_GANA = 4.5, -- studs/s que ganas cada segundo corriendo recto
-	FLUJO_PIERDE_GIRO = 30, -- pérdida por segundo al girar muy cerrado
-	FLUJO_DECAE = 5, -- lo que bajas cada segundo si vas por encima de FLUJO_MAX (por empujones)
+	FLUJO_MAX = 38, -- velocidad a la que llegas corriendo recto un rato
+	FLUJO_GANA = 3.5, -- studs/s que ganas cada segundo corriendo recto
+	FLUJO_PIERDE_GIRO = 18, -- pérdida por segundo al girar muy cerrado
+	FLUJO_SOLTAR = 25, -- pérdida por segundo al soltar las teclas
+	FLUJO_DECAE = 2.5, -- lo que bajas cada segundo si vas por encima de FLUJO_MAX (por empujones)
 	GROUND_ACCEL = 11, -- arrancar desde parado (más = antes)
 	GROUND_FRICTION = 9, -- frenado al soltar las teclas
 	STOP_SPEED = 10,
 	GIRO_SUELO = 7, -- lo rápido que giras corriendo despacio (a más velocidad, más peso)
 	ZANCADA = 6.5, -- studs por paso (para pasos, balanceo de cámara y brazos)
 
-	MAX_SPEED = 78, -- tope absoluto en horizontal
+	MAX_SPEED = 68, -- tope absoluto en horizontal
+	EMPUJON_CURVA = 1.6, -- cuánto se reducen los empujones al ir rápido (más = cuesta más llegar al tope)
+	CHOQUE_PIERDE = 0.35, -- parte de la velocidad extra que pierdes al chocar de frente con una pared
 
 	-- Aire
 	AIR_ACCEL = 24,
@@ -41,17 +44,18 @@ return {
 	VALLA_ALTURA_MAX = 4.3,
 	VALLA_VEL_MIN = 12,
 	VALLA_DURACION = 0.26,
-	VALLA_BONUS = 4,
+	VALLA_BONUS = 3,
 	-- Salto de valla de parkour (con inercia): el cuerpo se tumba de lado con las piernas
 	-- en horizontal, pasa más alto y más lejos, y sales más rápido
 	VALLA_RAPIDA_VEL = 34, -- velocidad a partir de la que sale este salto
 	VALLA_RAPIDA_ALTURA_MAX = 5.5,
 	VALLA_RAPIDA_DURACION = 0.38,
-	VALLA_RAPIDA_BONUS = 6,
+	VALLA_RAPIDA_BONUS = 5,
 
 	-- Escalar bordes altos (salta hacia el borde y te agarras)
 	ESCALAR_ALTURA_MAX = 9.5, -- desde tus pies
-	ESCALAR_ALCANCE = 2.8,
+	ESCALAR_ALCANCE = 3.3,
+	ESCALAR_MANOS = 2.6, -- cuánto por encima de tus manos puede estar el borde para agarrarlo
 	ESCALAR_DURACION = 0.42,
 	ESCALAR_CONSERVA = 0.7, -- parte de la velocidad que conservas al subir
 
@@ -61,8 +65,8 @@ return {
 	TREPAR_DISTANCIA = 2.8,
 
 	-- Correr por la pared
-	WALLRUN_DISTANCIA = 3,
-	WALLRUN_VEL_MIN = 20,
+	WALLRUN_DISTANCIA = 3.4,
+	WALLRUN_VEL_MIN = 18,
 	WALLRUN_DURACION = 1.3,
 	WALLRUN_SUBIDA_INICIAL = 10,
 	WALLRUN_GRAVEDAD = 24,
@@ -74,12 +78,12 @@ return {
 	MURO_SALTO_DISTANCIA = 3.2,
 	MURO_SALTO_FUERA = 28,
 	MURO_SALTO_ARRIBA = 54,
-	MURO_SALTO_BONUS = 5,
+	MURO_SALTO_BONUS = 4,
 
 	-- Slide
 	SLIDE_MIN_START = 18,
-	SLIDE_BOOST = 8, -- empujón al empezar
-	SLIDE_BOOST_ESPERA = 1.2, -- para que no se pueda encadenar sin parar
+	SLIDE_BOOST = 6, -- empujón al empezar
+	SLIDE_BOOST_ESPERA = 1.6, -- para que no se pueda encadenar sin parar
 	SLIDE_FRICTION = 0.12,
 	SLIDE_MIN_SPEED = 12,
 	SLIDE_STEER = 1.0,
@@ -88,7 +92,7 @@ return {
 	SLIDE_CAMERA_DROP = 1.7,
 
 	-- Barras (columpiarse)
-	BARRA_AGARRE = 2.8,
+	BARRA_AGARRE = 3.6,
 	BARRA_RADIO = 3.6,
 	BARRA_BOMBEO = 3.2,
 	BARRA_AMORTIGUA = 0.12,
@@ -97,12 +101,12 @@ return {
 	BARRA_ESPERA = 0.35,
 
 	-- Aterrizaje
-	CAIDA_FUERTE = 78, -- a partir de esta velocidad de caída hay que rodar
+	CAIDA_FUERTE = 105, -- a partir de esta velocidad de caída hay que rodar (unos 28 studs de caída)
 	RODAR_VENTANA = 0.3, -- pulsa slide como mucho este tiempo antes de tocar suelo
 	RODAR_BONUS = 6,
-	RODAR_DURACION = 0.5,
-	GOLPE_FRENO = 0.45,
-	GOLPE_ATURDIDO = 0.3,
+	RODAR_DURACION = 0.4,
+	GOLPE_PIERDE = 0.4, -- parte de la velocidad extra que pierdes al caer de alto sin rodar
+	GOLPE_ATURDIDO = 0.2,
 
 	-- Combo (para las cinemáticas épicas)
 	COMBO_CADUCA = 0.8,

@@ -1,4 +1,6 @@
--- Brazos en primera persona, con peso y con codos.
+-- Manos en primera persona: no se ven al correr; aparecen desde abajo solo cuando
+-- hacen algo (agarrar una barra, escalar, saltar una valla, trepar, tocar la pared o
+-- dar un manotazo). Tienen peso y codos.
 --
 -- Cada brazo tiene dos piezas: brazo (hombro → codo) y antebrazo con la mano
 -- (codo → mano). El codo se calcula solo (cinemática inversa de dos huesos), así al
@@ -337,6 +339,19 @@ local function actualizar(dt)
 			end
 		end
 
+		-- Solo se ven las manos cuando hacen algo. Si no, se van por debajo de la pantalla
+		-- (y vuelven a entrar desde abajo, con el muelle, cuando las necesitas).
+		local activa = (modo == "barra" and tieneAgarre)
+			or (modo == "escalar" and tieneAgarre)
+			or (modo == "valla" and tieneAgarre and (vallaRapida or l == -1))
+			or (modo == "normal" and tieneAgarre and pared == 0) -- trepando
+			or (pared > 0 and l == 1) or (pared < 0 and l == -1)
+			or (l == 1 and golpe > 0)
+		if not activa then
+			objetivo = reposo + Vector3.new(0.4 * l, -2.8, 0.9)
+			rigidez = C.BRAZOS_MUELLE * 0.8
+		end
+
 		-- que la mano nunca se meta dentro de la cámara ni se vaya demasiado lejos
 		if objetivo.Z > -0.9 then
 			objetivo = Vector3.new(objetivo.X, objetivo.Y, -0.9)
@@ -356,6 +371,9 @@ local function actualizar(dt)
 		local lateral = cam.RightVector
 		entre(b.brazo, hombro, codo, lateral, 0)
 		entre(b.antebrazo, codo, manoReal, lateral, b.giro)
+		-- el brazo de arriba nunca se ve; el antebrazo se esconde cuando está fuera de la vista
+		b.brazo.Transparency = 1
+		b.antebrazo.Transparency = b.pos.Y < -2.4 and 1 or 0
 	end
 end
 
