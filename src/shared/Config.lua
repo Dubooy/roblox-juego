@@ -42,6 +42,12 @@ return {
 	VALLA_VEL_MIN = 12,
 	VALLA_DURACION = 0.26,
 	VALLA_BONUS = 4,
+	-- Salto de valla de parkour (con inercia): el cuerpo se tumba de lado con las piernas
+	-- en horizontal, pasa más alto y más lejos, y sales más rápido
+	VALLA_RAPIDA_VEL = 34, -- velocidad a partir de la que sale este salto
+	VALLA_RAPIDA_ALTURA_MAX = 5.5,
+	VALLA_RAPIDA_DURACION = 0.38,
+	VALLA_RAPIDA_BONUS = 6,
 
 	-- Escalar bordes altos (salta hacia el borde y te agarras)
 	ESCALAR_ALTURA_MAX = 9.5, -- desde tus pies
@@ -117,7 +123,9 @@ return {
 	-- Posiciones respecto a la cámara: x derecha, y arriba, z hacia atrás (negativo = delante)
 	BRAZOS_ESCALA = 0.75,
 	BRAZOS_MANO = Vector3.new(0.95, -1.15, -2.3), -- mano derecha en reposo
-	BRAZOS_HOMBRO = Vector3.new(1.35, -1.6, -0.4), -- de dónde sale el brazo (fuera de la pantalla)
+	BRAZOS_HOMBRO = Vector3.new(1.3, -1.45, -0.2), -- hombro (fuera de la pantalla)
+	BRAZOS_LARGO_BRAZO = 1.15, -- hombro → codo
+	BRAZOS_LARGO_ANTEBRAZO = 1.3, -- codo → mano
 	BRAZOS_MUELLE = 170, -- rigidez del muelle (más = siguen antes a su sitio)
 	BRAZOS_AMORTIGUA = 0.62, -- 1 = sin rebote; menos = rebotan un poco (peso)
 

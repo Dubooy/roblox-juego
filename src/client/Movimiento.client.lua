@@ -480,6 +480,8 @@ local function publicar(grounded)
 	player:SetAttribute("MovPared", s.wallrunLado)
 	player:SetAttribute("MovModo", s.modo)
 	player:SetAttribute("MovAgarre", s.agarre)
+	player:SetAttribute("MovVallaRapida", s.anim ~= nil and s.anim.rapida == true and s.modo == "valla")
+	player:SetAttribute("MovLadoValla", s.ladoValla or 1)
 	player:SetAttribute("MovAnimT", s.anim and math.clamp((os.clock() - s.anim.inicio) / s.anim.duracion, 0, 1) or 0)
 	player:SetAttribute("MovRodando", os.clock() - s.rodarInicio < C.RODAR_DURACION)
 	player:SetAttribute("MovPaso", s.paso)
@@ -537,7 +539,7 @@ local function step(dt)
 			local subida = 1 - (1 - math.min(t * 1.8, 1)) ^ 2
 			pos = Vector3.new(
 				a.desde.X + (a.hasta.X - a.desde.X) * t,
-				a.desde.Y + (a.hasta.Y - a.desde.Y) * subida + math.sin(t * math.pi) * 0.6,
+				a.desde.Y + (a.hasta.Y - a.desde.Y) * subida + math.sin(t * math.pi) * (a.rapida and 1.4 or 0.6),
 				a.desde.Z + (a.hasta.Z - a.desde.Z) * t
 			)
 		end
@@ -623,16 +625,22 @@ local function step(dt)
 
 	-- 1) SALTAR VALLA (automático corriendo hacia un obstáculo bajo)
 	if libreDeAnim and wish.Magnitude > 0 and wish:Dot(adelante) > 0.6 and horiz.Magnitude >= C.VALLA_VEL_MIN and not s.trepar then
-		local b = buscarBorde(adelante, root.Size.X / 2 + 1.2 + horiz.Magnitude * 0.06)
-		if b and b.cabe and b.altura >= C.VALLA_ALTURA_MIN and b.altura <= C.VALLA_ALTURA_MAX then
+		local rapida = horiz.Magnitude >= C.VALLA_RAPIDA_VEL
+		local alturaMax = rapida and C.VALLA_RAPIDA_ALTURA_MAX or C.VALLA_ALTURA_MAX
+		local b = buscarBorde(adelante, root.Size.X / 2 + 1.2 + horiz.Magnitude * (rapida and 0.09 or 0.06))
+		if b and b.cabe and b.altura >= C.VALLA_ALTURA_MIN and b.altura <= alturaMax then
 			local rapidez = math.max(horiz.Magnitude, C.RUN_BASE)
-			local sobre = b.cima.Y + alturaPies() + 0.4
-			local avanceH = b.distancia + 2.6
+			local sobre = b.cima.Y + alturaPies() + (rapida and 0.9 or 0.4)
+			local avanceH = b.distancia + (rapida and 5 or 2.6)
 			local destino = flat(root.Position) + b.dentro * avanceH
 			local hasta = Vector3.new(destino.X, math.max(sobre, root.Position.Y), destino.Z)
-			local salida = empujon(b.dentro * rapidez, C.VALLA_BONUS, b.dentro)
-			empezarAnim("valla", hasta, C.VALLA_DURACION * math.clamp(26 / rapidez, 0.7, 1.2), salida, b.borde, now)
-			sonar("paso", 1.2, 0.5)
+			local salida = empujon(b.dentro * rapidez, rapida and C.VALLA_RAPIDA_BONUS or C.VALLA_BONUS, b.dentro)
+			local duracion = rapida and C.VALLA_RAPIDA_DURACION or C.VALLA_DURACION * math.clamp(26 / rapidez, 0.7, 1.2)
+			empezarAnim("valla", hasta, duracion, salida, b.borde, now)
+			s.anim.rapida = rapida
+			-- lado hacia el que se tumba el cuerpo (piernas en horizontal), alterna cada vez
+			s.ladoValla = -(s.ladoValla or 1)
+			sonar("paso", rapida and 0.9 or 1.2, 0.5)
 			publicar(false)
 			return
 		end
@@ -890,6 +898,34 @@ end
 -- Cámara: FOV por velocidad, balanceo al correr, inclinaciones, voltereta al rodar
 ------------------------------------------------------------------------
 
+-- Todo lo que se aplica a la cámara "de adorno" (balanceo, inclinaciones, voltereta)
+-- se guarda en s.offsetCam y se deshace justo antes de que Roblox mueva la cámara
+-- el frame siguiente. Si no, esos giros se irían sumando y acabarías mirando al suelo.
+s.offsetCam = CFrame.identity
+
+local function deshacerOffset()
+	if s.offsetCam ~= CFrame.identity then
+		camera.CFrame *= s.offsetCam:Inverse()
+		s.offsetCam = CFrame.identity
+	end
+end
+
+local function aplicarOffset(cf)
+	camera.CFrame *= cf
+	s.offsetCam *= cf
+end
+
+-- gira de verdad la vista hacia la horizontal (esto sí se queda)
+local function nivelarVista(dt, rapidez)
+	local look = camera.CFrame.LookVector
+	local pitch = math.asin(math.clamp(look.Y, -1, 1))
+	local objetivo = math.rad(-4)
+	local delta = (objetivo - pitch) * math.min(dt * rapidez, 1)
+	if math.abs(delta) > 1e-4 then
+		camera.CFrame *= CFrame.Angles(delta, 0, 0)
+	end
+end
+
 local function cameraStep(dt)
 	if not humanoid then
 		return
@@ -914,19 +950,36 @@ local function cameraStep(dt)
 	local bobY = -math.abs(math.sin(s.paso)) * amp
 	local bobRoll = math.sin(s.paso) * amp * 4
 
-	camera.CFrame *= CFrame.new(0, bobY, 0) * CFrame.Angles(0, 0, math.rad(s.roll + bobRoll))
+	-- salto de valla rápido: el cuerpo se tumba de lado (piernas en horizontal)
+	local vallaRoll, vallaBaja = 0, 0
+	if s.modo == "valla" and s.anim and s.anim.rapida then
+		local t = math.clamp((now - s.anim.inicio) / s.anim.duracion, 0, 1)
+		local curva = math.sin(t * math.pi)
+		vallaRoll = (s.ladoValla or 1) * 18 * curva
+		vallaBaja = -0.5 * curva
+	end
+
+	-- al escalar, la vista vuelve sola a mirar al frente
+	if s.modo == "escalar" and s.anim then
+		local t = math.clamp((now - s.anim.inicio) / s.anim.duracion, 0, 1)
+		if t > 0.3 then
+			nivelarVista(dt, 7)
+		end
+	end
+
+	aplicarOffset(CFrame.new(0, bobY + vallaBaja, 0) * CFrame.Angles(0, 0, math.rad(s.roll + bobRoll + vallaRoll)))
 
 	-- voltereta al rodar
 	local tr = (now - s.rodarInicio) / C.RODAR_DURACION
 	if tr >= 0 and tr < 1 then
 		local e = tr < 0.5 and 2 * tr * tr or 1 - (-2 * tr + 2) ^ 2 / 2
-		camera.CFrame *= CFrame.Angles(-e * math.pi * 2, 0, 0)
+		aplicarOffset(CFrame.Angles(-e * math.pi * 2, 0, 0))
 	end
 
 	-- escalar: la cabeza baja un poco al empujar el borde
 	if s.modo == "escalar" and s.anim then
 		local t = math.clamp((now - s.anim.inicio) / s.anim.duracion, 0, 1)
-		camera.CFrame *= CFrame.Angles(-math.sin(t * math.pi) * math.rad(6), 0, 0)
+		aplicarOffset(CFrame.Angles(-math.sin(t * math.pi) * math.rad(6), 0, 0))
 	end
 
 	s.landDip += (0 - s.landDip) * math.min(dt * 9, 1)
@@ -1086,6 +1139,7 @@ ReplicatedStorage:WaitForChild("Remotos"):WaitForChild("Empujon").OnClientEvent:
 end)
 
 RunService.PreSimulation:Connect(step)
+RunService:BindToRenderStep("MovimientoDeshacerCamara", Enum.RenderPriority.Camera.Value - 1, deshacerOffset)
 RunService:BindToRenderStep("MovimientoCamara", Enum.RenderPriority.Camera.Value + 1, function(dt)
 	cameraStep(dt)
 	hudStep()

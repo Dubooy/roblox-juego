@@ -10,6 +10,7 @@ salto y bunny-hop, más un mapa de pruebas que se construye solo al pulsar **Pla
 | Correr | WASD. Corriendo recto vas cogiendo velocidad (flujo) |
 | Saltar | Espacio (solo desde el suelo o apoyándote en un muro) |
 | Saltar vallas | corre hacia un obstáculo bajo: se salta solo sin frenar |
+| Salto de valla de parkour | igual, pero yendo rápido (34+): pasas tumbado con las piernas en horizontal, más alto y sales más rápido |
 | Escalar un borde | salta hacia él empujando hacia delante |
 | Trepar una pared | corre contra ella y pulsa saltar. Otra vez saltar = impulso hacia atrás |
 | Correr por la pared | salta en paralelo a una pared yendo rápido y mantén W |

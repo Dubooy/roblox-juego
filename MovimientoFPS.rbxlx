@@ -42,6 +42,12 @@ return {
 	VALLA_VEL_MIN = 12,
 	VALLA_DURACION = 0.26,
 	VALLA_BONUS = 4,
+	-- Salto de valla de parkour (con inercia): el cuerpo se tumba de lado con las piernas
+	-- en horizontal, pasa más alto y más lejos, y sales más rápido
+	VALLA_RAPIDA_VEL = 34, -- velocidad a partir de la que sale este salto
+	VALLA_RAPIDA_ALTURA_MAX = 5.5,
+	VALLA_RAPIDA_DURACION = 0.38,
+	VALLA_RAPIDA_BONUS = 6,
 
 	-- Escalar bordes altos (salta hacia el borde y te agarras)
 	ESCALAR_ALTURA_MAX = 9.5, -- desde tus pies
@@ -117,7 +123,9 @@ return {
 	-- Posiciones respecto a la cámara: x derecha, y arriba, z hacia atrás (negativo = delante)
 	BRAZOS_ESCALA = 0.75,
 	BRAZOS_MANO = Vector3.new(0.95, -1.15, -2.3), -- mano derecha en reposo
-	BRAZOS_HOMBRO = Vector3.new(1.35, -1.6, -0.4), -- de dónde sale el brazo (fuera de la pantalla)
+	BRAZOS_HOMBRO = Vector3.new(1.3, -1.45, -0.2), -- hombro (fuera de la pantalla)
+	BRAZOS_LARGO_BRAZO = 1.15, -- hombro → codo
+	BRAZOS_LARGO_ANTEBRAZO = 1.3, -- codo → mano
 	BRAZOS_MUELLE = 170, -- rigidez del muelle (más = siguen antes a su sitio)
 	BRAZOS_AMORTIGUA = 0.62, -- 1 = sin rebote; menos = rebotan un poco (peso)
 
@@ -1169,7 +1177,12 @@ while true do
 		end
 	end
 end
-]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX15"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX14"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX11"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona, con peso.
+]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX15"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX14"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX11"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona, con peso y con codos.
+--
+-- Cada brazo tiene dos piezas: brazo (hombro → codo) y antebrazo con la mano
+-- (codo → mano). El codo se calcula solo (cinemática inversa de dos huesos), así al
+-- correr los brazos van doblados de forma natural.
+-- En el salto de valla de parkour también se ven tus piernas pasando en horizontal.
 --
 -- Brazos de estilo Roblox clásico con TU color de piel y TU camiseta (con un Humanoid
 -- R6 dentro, Roblox pinta la camiseta en las piezas "Right Arm"/"Left Arm").
@@ -1200,7 +1213,8 @@ local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 local modelo
-local brazos = {} -- [lado] = { parte, pos (cámara), vel, giro }
+local brazos = {} -- [lado] = { brazo, antebrazo, pos (cámara), vel, giro }
+local piernas = {} -- [lado] = Part (solo visibles en el salto de valla rápido)
 
 local estado = {
 	sway = Vector2.zero,
@@ -1247,11 +1261,16 @@ local function construir()
 		return p and p.Color or Color3.fromRGB(234, 184, 146)
 	end
 
-	for _, lado in { 1, -1 } do
+	local pantalon = char:FindFirstChildOfClass("Pants")
+	if pantalon then
+		pantalon:Clone().Parent = modelo
+	end
+
+	local function pieza(nombre, tam, color)
 		local p = Instance.new("Part")
-		p.Name = lado == 1 and "Right Arm" or "Left Arm"
-		p.Size = Vector3.new(1, 2, 1) * C.BRAZOS_ESCALA
-		p.Color = colorDe(lado)
+		p.Name = nombre
+		p.Size = tam
+		p.Color = color
 		p.Material = Enum.Material.SmoothPlastic
 		p.Reflectance = 0
 		p.TopSurface = Enum.SurfaceType.Smooth
@@ -1262,14 +1281,32 @@ local function construir()
 		p.CanTouch = false
 		p.CastShadow = false
 		p.Parent = modelo
+		return p
+	end
+
+	-- color de la manga: el del torso (si no hay camiseta, la piel)
+	local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+	local e = C.BRAZOS_ESCALA
+	for _, lado in { 1, -1 } do
+		local piel = colorDe(lado)
+		-- antebrazo con la mano: pieza R6 "Right/Left Arm" (lleva la parte baja de la camiseta y la mano)
+		local antebrazo = pieza(lado == 1 and "Right Arm" or "Left Arm", Vector3.new(0.9 * e, C.BRAZOS_LARGO_ANTEBRAZO, 0.9 * e), piel)
+		-- brazo (de hombro a codo)
+		local manga = camiseta and torso and torso.Color or piel
+		local brazo = pieza("Brazo", Vector3.new(0.95 * e, C.BRAZOS_LARGO_BRAZO, 0.95 * e), manga)
 		local reposo = Vector3.new(C.BRAZOS_MANO.X * lado, C.BRAZOS_MANO.Y, C.BRAZOS_MANO.Z)
-		brazos[lado] = { parte = p, pos = reposo + Vector3.new(0, -1.5, 0.5), vel = Vector3.zero, giro = 0 }
+		brazos[lado] = { brazo = brazo, antebrazo = antebrazo, parte = antebrazo, pos = reposo + Vector3.new(0, -1.5, 0.5), vel = Vector3.zero, giro = 0 }
+
+		local pierna = pieza(lado == 1 and "Right Leg" or "Left Leg", Vector3.new(1, 2, 1) * 0.9, (char:FindFirstChild(lado == 1 and "RightUpperLeg" or "LeftUpperLeg") or char:FindFirstChild(lado == 1 and "Right Leg" or "Left Leg") or antebrazo).Color)
+		pierna.Transparency = 1
+		piernas[lado] = pierna
 	end
 	if not camiseta then
-		local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
 		local bc = Instance.new("BodyColors")
-		bc.RightArmColor3 = brazos[1].parte.Color
-		bc.LeftArmColor3 = brazos[-1].parte.Color
+		bc.RightArmColor3 = brazos[1].antebrazo.Color
+		bc.LeftArmColor3 = brazos[-1].antebrazo.Color
+		bc.RightLegColor3 = piernas[1].Color
+		bc.LeftLegColor3 = piernas[-1].Color
 		if torso then
 			bc.TorsoColor3 = torso.Color
 		end
@@ -1296,9 +1333,9 @@ local function muelle(b, objetivo, rigidez, dt)
 	b.pos += b.vel * paso
 end
 
--- coloca la pieza con la mano (su cara de abajo) en "mano" y apuntando desde "hombro"
-local function colocar(p, hombro, mano, lateral, giro)
-	local dir = mano - hombro
+-- coloca una pieza entre a y b (su -Y apunta de a hacia b)
+local function entre(p, a, b, lateral, giro)
+	local dir = b - a
 	if dir.Magnitude < 0.01 then
 		return
 	end
@@ -1306,9 +1343,21 @@ local function colocar(p, hombro, mano, lateral, giro)
 	local derecha = lateral - abajo * lateral:Dot(abajo)
 	derecha = derecha.Magnitude > 0.01 and derecha.Unit or abajo:Cross(Vector3.zAxis).Unit
 	local atras = derecha:Cross(abajo)
-	local largo = p.Size.Y
-	local centro = mano + abajo * (largo / 2) -- la mano queda en la punta
-	p.CFrame = CFrame.fromMatrix(centro, derecha, abajo, atras) * CFrame.Angles(0, giro, 0)
+	p.CFrame = CFrame.fromMatrix((a + b) / 2, derecha, abajo, atras) * CFrame.Angles(0, giro or 0, 0)
+end
+
+-- Cinemática inversa de dos huesos: dado el hombro, la mano y hacia dónde debe
+-- apuntar el codo ("polo"), devuelve dónde queda el codo.
+local function codoIK(hombro, mano, largoA, largoB, polo)
+	local d = mano - hombro
+	local dist = math.clamp(d.Magnitude, 0.05, largoA + largoB - 0.01)
+	local dir = d.Unit
+	-- distancia del hombro al punto del eje que queda bajo el codo
+	local x = (largoA * largoA - largoB * largoB + dist * dist) / (2 * dist)
+	local h = math.sqrt(math.max(largoA * largoA - x * x, 0))
+	local perp = polo - dir * polo:Dot(dir)
+	perp = perp.Magnitude > 0.01 and perp.Unit or dir:Cross(Vector3.yAxis).Unit
+	return hombro + dir * x + perp * h, hombro + dir * dist
 end
 
 ------------------------------------------------------------------------
@@ -1372,6 +1421,22 @@ local function actualizar(dt)
 		return cam:PointToObjectSpace(p)
 	end
 
+	-- piernas en el salto de valla de parkour: pasan en horizontal por debajo de la vista
+	local vallaRapida = player:GetAttribute("MovVallaRapida") == true
+	local ladoValla = player:GetAttribute("MovLadoValla") or 1
+	for lado, pierna in piernas do
+		if vallaRapida then
+			local curva = math.sin(animT * math.pi)
+			-- cadera abajo, pies hacia el lado contrario al que se tumba el cuerpo
+			local cadera = Vector3.new(-0.4 * ladoValla + lado * 0.45, -2.6 + curva * 0.6, -1.2)
+			local pie = cadera + Vector3.new(-ladoValla * 2.6 * curva + lado * 0.2, 0.3 * curva, -1.6 * curva - 0.4)
+			entre(pierna, cam:PointToWorldSpace(cadera), cam:PointToWorldSpace(pie), cam.LookVector, 0)
+			pierna.Transparency = 1 - math.clamp(curva * 3, 0, 1)
+		else
+			pierna.Transparency = 1
+		end
+	end
+
 	for lado, b in brazos do
 		local l = lado
 		local reposo = Vector3.new(C.BRAZOS_MANO.X * l, C.BRAZOS_MANO.Y, C.BRAZOS_MANO.Z)
@@ -1389,6 +1454,13 @@ local function actualizar(dt)
 				objetivo = objetivo:Lerp(reposo, (animT - 0.75) / 0.25)
 			end
 			rigidez = 500
+		elseif modo == "valla" and tieneAgarre and vallaRapida then
+			-- las dos manos se apoyan en el obstáculo y empujan
+			objetivo = delMundo(agarre + cam.RightVector * 0.7 * l + Vector3.new(0, 0.2, 0))
+			if animT > 0.55 then
+				objetivo = objetivo:Lerp(reposo + Vector3.new(0.5 * l, 0.2, 0.4), (animT - 0.55) / 0.45)
+			end
+			rigidez = 600
 		elseif modo == "valla" and tieneAgarre then
 			if l == -1 then
 				-- la izquierda se apoya en el obstáculo
@@ -1455,8 +1527,14 @@ local function actualizar(dt)
 		muelle(b, objetivo, rigidez, dt)
 		b.giro = lerp(b.giro, giro, math.min(dt * 20, 1))
 
-		local hombro = Vector3.new(C.BRAZOS_HOMBRO.X * l, C.BRAZOS_HOMBRO.Y, C.BRAZOS_HOMBRO.Z)
-		colocar(b.parte, cam:PointToWorldSpace(hombro), cam:PointToWorldSpace(b.pos), cam.RightVector, b.giro)
+		local hombro = cam:PointToWorldSpace(Vector3.new(C.BRAZOS_HOMBRO.X * l, C.BRAZOS_HOMBRO.Y, C.BRAZOS_HOMBRO.Z))
+		local mano = cam:PointToWorldSpace(b.pos)
+		-- el codo apunta hacia fuera y hacia abajo, como al correr
+		local polo = cam.RightVector * l * 0.8 - cam.UpVector * 1 + cam.LookVector * 0.2
+		local codo, manoReal = codoIK(hombro, mano, C.BRAZOS_LARGO_BRAZO, C.BRAZOS_LARGO_ANTEBRAZO, polo)
+		local lateral = cam.RightVector
+		entre(b.brazo, hombro, codo, lateral, 0)
+		entre(b.antebrazo, codo, manoReal, lateral, b.giro)
 	end
 end
 
@@ -1959,6 +2037,8 @@ local function publicar(grounded)
 	player:SetAttribute("MovPared", s.wallrunLado)
 	player:SetAttribute("MovModo", s.modo)
 	player:SetAttribute("MovAgarre", s.agarre)
+	player:SetAttribute("MovVallaRapida", s.anim ~= nil and s.anim.rapida == true and s.modo == "valla")
+	player:SetAttribute("MovLadoValla", s.ladoValla or 1)
 	player:SetAttribute("MovAnimT", s.anim and math.clamp((os.clock() - s.anim.inicio) / s.anim.duracion, 0, 1) or 0)
 	player:SetAttribute("MovRodando", os.clock() - s.rodarInicio < C.RODAR_DURACION)
 	player:SetAttribute("MovPaso", s.paso)
@@ -2016,7 +2096,7 @@ local function step(dt)
 			local subida = 1 - (1 - math.min(t * 1.8, 1)) ^ 2
 			pos = Vector3.new(
 				a.desde.X + (a.hasta.X - a.desde.X) * t,
-				a.desde.Y + (a.hasta.Y - a.desde.Y) * subida + math.sin(t * math.pi) * 0.6,
+				a.desde.Y + (a.hasta.Y - a.desde.Y) * subida + math.sin(t * math.pi) * (a.rapida and 1.4 or 0.6),
 				a.desde.Z + (a.hasta.Z - a.desde.Z) * t
 			)
 		end
@@ -2102,16 +2182,22 @@ local function step(dt)
 
 	-- 1) SALTAR VALLA (automático corriendo hacia un obstáculo bajo)
 	if libreDeAnim and wish.Magnitude > 0 and wish:Dot(adelante) > 0.6 and horiz.Magnitude >= C.VALLA_VEL_MIN and not s.trepar then
-		local b = buscarBorde(adelante, root.Size.X / 2 + 1.2 + horiz.Magnitude * 0.06)
-		if b and b.cabe and b.altura >= C.VALLA_ALTURA_MIN and b.altura <= C.VALLA_ALTURA_MAX then
+		local rapida = horiz.Magnitude >= C.VALLA_RAPIDA_VEL
+		local alturaMax = rapida and C.VALLA_RAPIDA_ALTURA_MAX or C.VALLA_ALTURA_MAX
+		local b = buscarBorde(adelante, root.Size.X / 2 + 1.2 + horiz.Magnitude * (rapida and 0.09 or 0.06))
+		if b and b.cabe and b.altura >= C.VALLA_ALTURA_MIN and b.altura <= alturaMax then
 			local rapidez = math.max(horiz.Magnitude, C.RUN_BASE)
-			local sobre = b.cima.Y + alturaPies() + 0.4
-			local avanceH = b.distancia + 2.6
+			local sobre = b.cima.Y + alturaPies() + (rapida and 0.9 or 0.4)
+			local avanceH = b.distancia + (rapida and 5 or 2.6)
 			local destino = flat(root.Position) + b.dentro * avanceH
 			local hasta = Vector3.new(destino.X, math.max(sobre, root.Position.Y), destino.Z)
-			local salida = empujon(b.dentro * rapidez, C.VALLA_BONUS, b.dentro)
-			empezarAnim("valla", hasta, C.VALLA_DURACION * math.clamp(26 / rapidez, 0.7, 1.2), salida, b.borde, now)
-			sonar("paso", 1.2, 0.5)
+			local salida = empujon(b.dentro * rapidez, rapida and C.VALLA_RAPIDA_BONUS or C.VALLA_BONUS, b.dentro)
+			local duracion = rapida and C.VALLA_RAPIDA_DURACION or C.VALLA_DURACION * math.clamp(26 / rapidez, 0.7, 1.2)
+			empezarAnim("valla", hasta, duracion, salida, b.borde, now)
+			s.anim.rapida = rapida
+			-- lado hacia el que se tumba el cuerpo (piernas en horizontal), alterna cada vez
+			s.ladoValla = -(s.ladoValla or 1)
+			sonar("paso", rapida and 0.9 or 1.2, 0.5)
 			publicar(false)
 			return
 		end
@@ -2369,6 +2455,34 @@ end
 -- Cámara: FOV por velocidad, balanceo al correr, inclinaciones, voltereta al rodar
 ------------------------------------------------------------------------
 
+-- Todo lo que se aplica a la cámara "de adorno" (balanceo, inclinaciones, voltereta)
+-- se guarda en s.offsetCam y se deshace justo antes de que Roblox mueva la cámara
+-- el frame siguiente. Si no, esos giros se irían sumando y acabarías mirando al suelo.
+s.offsetCam = CFrame.identity
+
+local function deshacerOffset()
+	if s.offsetCam ~= CFrame.identity then
+		camera.CFrame *= s.offsetCam:Inverse()
+		s.offsetCam = CFrame.identity
+	end
+end
+
+local function aplicarOffset(cf)
+	camera.CFrame *= cf
+	s.offsetCam *= cf
+end
+
+-- gira de verdad la vista hacia la horizontal (esto sí se queda)
+local function nivelarVista(dt, rapidez)
+	local look = camera.CFrame.LookVector
+	local pitch = math.asin(math.clamp(look.Y, -1, 1))
+	local objetivo = math.rad(-4)
+	local delta = (objetivo - pitch) * math.min(dt * rapidez, 1)
+	if math.abs(delta) > 1e-4 then
+		camera.CFrame *= CFrame.Angles(delta, 0, 0)
+	end
+end
+
 local function cameraStep(dt)
 	if not humanoid then
 		return
@@ -2393,19 +2507,36 @@ local function cameraStep(dt)
 	local bobY = -math.abs(math.sin(s.paso)) * amp
 	local bobRoll = math.sin(s.paso) * amp * 4
 
-	camera.CFrame *= CFrame.new(0, bobY, 0) * CFrame.Angles(0, 0, math.rad(s.roll + bobRoll))
+	-- salto de valla rápido: el cuerpo se tumba de lado (piernas en horizontal)
+	local vallaRoll, vallaBaja = 0, 0
+	if s.modo == "valla" and s.anim and s.anim.rapida then
+		local t = math.clamp((now - s.anim.inicio) / s.anim.duracion, 0, 1)
+		local curva = math.sin(t * math.pi)
+		vallaRoll = (s.ladoValla or 1) * 18 * curva
+		vallaBaja = -0.5 * curva
+	end
+
+	-- al escalar, la vista vuelve sola a mirar al frente
+	if s.modo == "escalar" and s.anim then
+		local t = math.clamp((now - s.anim.inicio) / s.anim.duracion, 0, 1)
+		if t > 0.3 then
+			nivelarVista(dt, 7)
+		end
+	end
+
+	aplicarOffset(CFrame.new(0, bobY + vallaBaja, 0) * CFrame.Angles(0, 0, math.rad(s.roll + bobRoll + vallaRoll)))
 
 	-- voltereta al rodar
 	local tr = (now - s.rodarInicio) / C.RODAR_DURACION
 	if tr >= 0 and tr < 1 then
 		local e = tr < 0.5 and 2 * tr * tr or 1 - (-2 * tr + 2) ^ 2 / 2
-		camera.CFrame *= CFrame.Angles(-e * math.pi * 2, 0, 0)
+		aplicarOffset(CFrame.Angles(-e * math.pi * 2, 0, 0))
 	end
 
 	-- escalar: la cabeza baja un poco al empujar el borde
 	if s.modo == "escalar" and s.anim then
 		local t = math.clamp((now - s.anim.inicio) / s.anim.duracion, 0, 1)
-		camera.CFrame *= CFrame.Angles(-math.sin(t * math.pi) * math.rad(6), 0, 0)
+		aplicarOffset(CFrame.Angles(-math.sin(t * math.pi) * math.rad(6), 0, 0))
 	end
 
 	s.landDip += (0 - s.landDip) * math.min(dt * 9, 1)
@@ -2565,6 +2696,7 @@ ReplicatedStorage:WaitForChild("Remotos"):WaitForChild("Empujon").OnClientEvent:
 end)
 
 RunService.PreSimulation:Connect(step)
+RunService:BindToRenderStep("MovimientoDeshacerCamara", Enum.RenderPriority.Camera.Value - 1, deshacerOffset)
 RunService:BindToRenderStep("MovimientoCamara", Enum.RenderPriority.Camera.Value + 1, function(dt)
 	cameraStep(dt)
 	hudStep()
