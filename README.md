@@ -3,26 +3,22 @@
 Movimiento fluido en primera persona con dash, slide, doble salto, coyote time, buffer de
 salto y bunny-hop, más un mapa de pruebas que se construye solo al pulsar **Play**.
 
-## Controles
+## Controles (fase 1: movimiento nuevo)
 
-| Acción | Teclado | Mando | Móvil |
-|---|---|---|---|
-| Moverse | WASD | stick izquierdo | joystick |
-| Salto / doble salto | Espacio | A | botón de salto |
-| Dash (3 cargas) | Shift izq. o Q | L1 o X | botón "Dash" |
-| Slide (mantener) | Ctrl izq. o C | B | botón "Slide" |
-| Manotazo (empuja) | clic izquierdo o E | R2 | botón "Manotazo" |
-| Correr por la pared | salta hacia una pared en paralelo, rápido, y mantén W | | |
-| Salto de pared | Espacio mientras corres por la pared | A | botón de salto |
+| Acción | Teclado | Mando |
+|---|---|---|
+| Moverse | WASD | stick izquierdo |
+| Saltar (solo desde el suelo) | Espacio | A |
+| Saltar desde un muro (en el aire, cerca de una pared) | Espacio | A |
+| Correr por la pared | ve rápido, salta en paralelo a una pared y mantén W | |
+| Escalar un borde | empuja hacia el borde al llegar saltando | |
+| Barra | salta hacia ella: te agarras solo. W/S para balancearte, Espacio para salir lanzado, slide para soltarte | |
+| Slide (mantener) | Ctrl, C o Shift | B |
+| Rodar al caer de alto | pulsa slide justo antes de tocar el suelo | B |
+| Manotazo | clic izquierdo o E | R2 |
 
-Abajo en pantalla ves la velocidad y las cargas de dash.
-
-## Trucos para probar
-- **Bunny-hop:** pulsa salto justo al aterrizar (hay un pequeño margen) y gira suavemente con el ratón
-  mientras pulsas A o D: ganas velocidad.
-- **Slide-hop:** corre, desliza (Ctrl) y salta durante el slide para conservar el empujón.
-- **Dash + doble salto** para cruzar los huecos grandes del parkour.
-- Desliza en la **bajada verde** (sube por la escalera) para alcanzar la velocidad máxima.
+No hay dash ni doble salto: la velocidad se gana con inercia (barras, saltos de pared,
+rodar y deslizar cuesta abajo) y se pierde poco a poco corriendo normal.
 
 ## Modo Contagio
 Uno empieza pillando (se queda quieto unos segundos para daros ventaja). Cada jugador al que da un

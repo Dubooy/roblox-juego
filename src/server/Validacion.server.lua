@@ -12,7 +12,7 @@ workspace.Gravity = C.GRAVITY
 
 local INTERVALO = 0.25
 local AVISOS_PARA_MARCAR = 4
-local limite = math.max(C.MAX_SPEED, C.DASH_SPEED, C.MANOTAZO_EMPUJE + C.MAX_SPEED * C.MANOTAZO_EMPUJE_EXTRA_VEL) * C.SERVER_SPEED_TOLERANCE
+local limite = math.max(C.MAX_SPEED, C.MANOTAZO_EMPUJE + C.MAX_SPEED * C.MANOTAZO_EMPUJE_EXTRA_VEL) * C.SERVER_SPEED_TOLERANCE
 
 local registro = {} -- [player] = { pos, avisos }
 

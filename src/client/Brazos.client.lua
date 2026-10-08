@@ -1,144 +1,161 @@
--- Brazos en primera persona: los brazos de verdad de tu avatar de Roblox
--- (con tu piel, tu camiseta y tus accesorios de brazo).
+-- Brazos en primera persona (viewmodel).
 --
--- En primera persona Roblox esconde el cuerpo. Aquí volvemos visibles solo los brazos
--- y giramos los hombros para que apunten hacia delante, siguiendo la cámara.
--- Reaccionan al movimiento (lee el estado que publica Movimiento.client.lua):
--- balanceo al correr, retraso al girar, slide, dash, salto, aterrizaje, pared y manotazo.
+-- Se hace una COPIA de los brazos de tu avatar (con tu piel, tu camiseta y sus mallas)
+-- y se pega a la cámara. Es como lo hacen los shooters de Roblox: no depende del
+-- cuerpo de verdad, que en primera persona Roblox esconde.
+--
+-- Cada brazo es una cadena hombro → codo → mano que apunta hacia donde toque según lo
+-- que estés haciendo (lo publica Movimiento.client.lua en atributos Mov*):
+-- correr, slide, pared, barra, escalar, rodar, salto, aterrizaje y manotazo.
 -- Funciona con avatares R15 y R6.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
-local brazos = {} -- { lado, hombro (Motor6D), codo (Motor6D o nil), partes = {BasePart} }
+local modelo
+local brazos = {} -- [lado] = { piezas = {Part...}, largos = {number...}, dir = Vector3, codo = number }
 
 local estado = {
-	tiempo = 0,
 	bob = 0,
 	sway = Vector2.zero,
-	slide = 0,
-	dash = 0,
-	aire = 0,
-	aterrizaje = 0,
-	estabaEnSuelo = true,
 	ultimoSalto = -math.huge,
 	salto = 0,
-	pared = 0,
+	aterrizaje = 0,
+	estabaEnSuelo = true,
 }
 
-local NOMBRES = {
-	R15 = {
-		[1] = { hombro = "RightShoulder", codo = "RightElbow", partes = { "RightUpperArm", "RightLowerArm", "RightHand" } },
-		[-1] = { hombro = "LeftShoulder", codo = "LeftElbow", partes = { "LeftUpperArm", "LeftLowerArm", "LeftHand" } },
-	},
-	R6 = {
-		[1] = { hombro = "Right Shoulder", partes = { "Right Arm" } },
-		[-1] = { hombro = "Left Shoulder", partes = { "Left Arm" } },
-	},
+local PIEZAS = {
+	R15 = { [1] = { "RightUpperArm", "RightLowerArm", "RightHand" }, [-1] = { "LeftUpperArm", "LeftLowerArm", "LeftHand" } },
+	R6 = { [1] = { "Right Arm" }, [-1] = { "Left Arm" } },
 }
 
-local function buscarMotor(char, nombre)
-	for _, d in char:GetDescendants() do
-		if d:IsA("Motor6D") and d.Name == nombre then
-			return d
-		end
+local function construir()
+	if modelo then
+		modelo:Destroy()
+		modelo = nil
 	end
-	return nil
-end
-
-local function prepararPersonaje(char)
 	brazos = {}
-	local hum = char:WaitForChild("Humanoid")
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then
+		return
+	end
 	local tipo = hum.RigType == Enum.HumanoidRigType.R15 and "R15" or "R6"
-	-- esperar a que el avatar termine de cargar
-	for _ = 1, 50 do
-		if buscarMotor(char, NOMBRES[tipo][1].hombro) then
-			break
+
+	modelo = Instance.new("Model")
+	modelo.Name = "BrazosVista"
+	-- con un Humanoid dentro, Roblox pinta la camiseta y los colores del cuerpo
+	local h = Instance.new("Humanoid")
+	h.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	h.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+	h.RequiresNeck = false
+	h.BreakJointsOnDeath = false
+	h.EvaluateStateMachine = false
+	h.Parent = modelo
+	for _, nombre in { "Shirt", "BodyColors" } do
+		local v = char:FindFirstChildOfClass(nombre)
+		if v then
+			v:Clone().Parent = modelo
 		end
-		task.wait(0.1)
 	end
+
 	for _, lado in { 1, -1 } do
-		local n = NOMBRES[tipo][lado]
-		local hombro = buscarMotor(char, n.hombro)
-		if hombro then
-			local partes = {}
-			for _, nombre in n.partes do
-				local p = char:FindFirstChild(nombre)
-				if p then
-					table.insert(partes, p)
+		local piezas, largos = {}, {}
+		for _, nombre in PIEZAS[tipo][lado] do
+			local original = char:FindFirstChild(nombre)
+			if original then
+				local p = original:Clone()
+				-- quitar uniones y extras; se quedan la malla y las texturas
+				for _, hijo in p:GetChildren() do
+					if not (hijo:IsA("DataModelMesh") or hijo:IsA("Decal") or hijo:IsA("SurfaceAppearance")) then
+						hijo:Destroy()
+					end
 				end
+				p.Size = original.Size * C.BRAZOS_ESCALA
+				p.Anchored = true
+				p.CanCollide = false
+				p.CanQuery = false
+				p.CanTouch = false
+				p.CastShadow = false
+				p.Massless = true
+				p.LocalTransparencyModifier = 0
+				p.Transparency = 0
+				p.Parent = modelo
+				table.insert(piezas, p)
+				table.insert(largos, p.Size.Y)
 			end
-			table.insert(brazos, {
-				lado = lado,
-				hombro = hombro,
-				codo = n.codo and buscarMotor(char, n.codo) or nil,
-				partes = partes,
-			})
+		end
+		if #piezas > 0 then
+			brazos[lado] = { piezas = piezas, largos = largos, dir = Vector3.new(0, -0.4, -1).Unit, codo = 0.4 }
 		end
 	end
+	modelo.Parent = camera
 end
 
 local function lerp(a, b, t)
 	return a + (b - a) * t
 end
 
--- Gira el hombro para que el brazo (que cuelga hacia -Y) apunte en "direccion" (mundo).
-local function apuntarHombro(motor, direccion, giroMuneca)
-	local p0 = motor.Part0
-	if not p0 then
-		return
+-- vector "lateral" hecho perpendicular a "abajo"
+local function unitLateral(lateral, abajo)
+	local d = lateral - abajo * lateral:Dot(abajo)
+	if d.Magnitude < 0.01 then
+		d = abajo:Cross(Vector3.zAxis)
 	end
-	local junta = p0.CFrame * motor.C0 -- marco del hombro en el mundo, sin animación
-	local abajo = -direccion.Unit -- el +Y del brazo debe mirar al lado contrario
-	local lateral = camera.CFrame.RightVector
-	lateral = (lateral - abajo * lateral:Dot(abajo))
-	if lateral.Magnitude < 0.01 then
-		return
-	end
-	lateral = lateral.Unit
-	local atras = lateral:Cross(abajo)
-	local objetivo = CFrame.fromMatrix(Vector3.zero, lateral, abajo, atras) * CFrame.Angles(0, giroMuneca or 0, 0)
-	local rotJunta = junta - junta.Position
-	motor.Transform = rotJunta:Inverse() * objetivo
+	return d.Unit
+end
+
+-- coloca una pieza para que vaya de "desde" en dirección "dir" (su -Y apunta en dir)
+local function colocar(p, desde, dir, largo, lateral)
+	local abajo = -dir
+	local derecha = unitLateral(lateral, abajo)
+	local atras = derecha:Cross(abajo)
+	p.CFrame = CFrame.fromMatrix(desde + dir * (largo / 2), derecha, abajo, atras)
+	return desde + dir * largo
+end
+
+-- gira "v" un ángulo alrededor de "eje"
+local function girar(v, eje, ang)
+	return CFrame.fromAxisAngle(eje, ang):VectorToWorldSpace(v)
 end
 
 local function actualizar(dt)
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local cabeza = char and char:FindFirstChild("Head")
-	if not (hum and hum.Health > 0 and cabeza and #brazos > 0) then
+	local visible = hum and hum.Health > 0 and cabeza and (camera.CFrame.Position - cabeza.Position).Magnitude < 2.5
+	if not modelo then
 		return
 	end
-	local primera = (camera.CFrame.Position - cabeza.Position).Magnitude < 2
-	if not primera then
+	modelo.Parent = visible and camera or nil
+	if not visible then
 		return
 	end
 
+	local now = os.clock()
 	local vel = player:GetAttribute("MovVelocidad") or 0
 	local enSlide = player:GetAttribute("MovSlide") == true
-	local enDash = player:GetAttribute("MovDash") == true
 	local enSuelo = player:GetAttribute("MovSuelo") ~= false
-	local ultimoSalto = player:GetAttribute("MovUltimoSalto") or -math.huge
 	local pared = player:GetAttribute("MovPared") or 0
+	local modo = player:GetAttribute("MovModo") or "normal"
+	local barra = player:GetAttribute("MovBarra")
+	local rodando = player:GetAttribute("MovRodando") == true
+	local ultimoSalto = player:GetAttribute("MovUltimoSalto") or -math.huge
 
-	local k = math.min(dt * 12, 1)
-	estado.tiempo += dt
+	-- balanceo al correr
+	local andar = (enSuelo and not enSlide and modo == "normal") and math.clamp(vel / 20, 0, 1.3) or 0
+	estado.bob += dt * (4 + vel * 0.28) * (andar > 0.05 and 1 or 0)
 
-	local andar = (enSuelo and not enSlide) and math.clamp(vel / 16, 0, 1) or 0
-	estado.bob += dt * (5 + vel * 0.3) * (andar > 0.05 and 1 or 0)
-
+	-- retraso al girar la vista
 	local delta = UserInputService:GetMouseDelta()
-	local objetivoSway = Vector2.new(math.clamp(-delta.X * 0.006, -0.25, 0.25), math.clamp(delta.Y * 0.006, -0.25, 0.25))
-	estado.sway = estado.sway:Lerp(objetivoSway, math.min(dt * 8, 1))
-
-	estado.slide = lerp(estado.slide, enSlide and 1 or 0, k)
-	estado.dash = lerp(estado.dash, enDash and 1 or 0, math.min(dt * 18, 1))
-	estado.aire = lerp(estado.aire, enSuelo and 0 or 1, math.min(dt * 6, 1))
-	estado.pared = lerp(estado.pared, pared, k)
+	estado.sway = estado.sway:Lerp(Vector2.new(math.clamp(-delta.X * 0.005, -0.2, 0.2), math.clamp(delta.Y * 0.005, -0.2, 0.2)), math.min(dt * 8, 1))
 
 	if ultimoSalto ~= estado.ultimoSalto then
 		estado.ultimoSalto = ultimoSalto
@@ -151,7 +168,8 @@ local function actualizar(dt)
 	estado.estabaEnSuelo = enSuelo
 	estado.aterrizaje = lerp(estado.aterrizaje, 0, math.min(dt * 9, 1))
 
-	local tm = os.clock() - (player:GetAttribute("MovManotazo") or -math.huge)
+	-- manotazo: 0 → 1 → 0 en ~0,3 s
+	local tm = now - (player:GetAttribute("MovManotazo") or -math.huge)
 	local golpe = 0
 	if tm < 0.08 then
 		golpe = tm / 0.08
@@ -160,56 +178,91 @@ local function actualizar(dt)
 	end
 
 	local cam = camera.CFrame
-	for _, b in brazos do
-		local l = b.lado
-		local fase = estado.bob + (l == 1 and math.pi or 0)
+	for lado, b in brazos do
+		local l = lado
+		local hombro = cam:PointToWorldSpace(Vector3.new(C.BRAZOS_HOMBRO.X * l, C.BRAZOS_HOMBRO.Y, C.BRAZOS_HOMBRO.Z))
+		local objetivo -- dirección en el mundo
+		local codo = 0.45 -- radianes de doblez
 
-		-- Dirección del brazo en coordenadas de la cámara (x derecha, y arriba, z atrás)
-		local d = Vector3.new(0.12 * l, -0.42, -1)
-		d += Vector3.new(math.cos(fase) * 0.06, math.abs(math.sin(fase)) * -0.08, 0) * andar
-		d += Vector3.new(estado.sway.X, estado.sway.Y, 0)
-		d += Vector3.new(0.5 * l, -0.2, 0.3) * estado.slide -- se abren para equilibrarse
-		d += Vector3.new(0.15 * l, -0.5, 0.6) * estado.dash -- hacia atrás
-		d += Vector3.new(0.1 * l, 0.25, 0) * estado.aire + Vector3.new(0, 0.35, 0) * estado.salto
-		d += Vector3.new(0, -0.3, 0) * estado.aterrizaje
-		-- en la pared, la mano de ese lado la toca
-		if (estado.pared > 0.1 and l == 1) or (estado.pared < -0.1 and l == -1) then
-			d += Vector3.new(0.9 * l, 0.45, 0.2) * math.abs(estado.pared)
-		end
-		-- manotazo con la derecha, cruzando hacia el centro
-		if l == 1 then
-			d += Vector3.new(-0.35, 0.5, -0.4) * golpe
+		if modo == "barra" and typeof(barra) == "Vector3" then
+			-- las dos manos a la barra, brazos estirados
+			local agarre = barra + cam.RightVector * 0.7 * l
+			objetivo = (agarre - hombro).Unit
+			codo = 0.05
+		elseif modo == "escalar" then
+			-- manos hacia delante y abajo, empujando el borde
+			objetivo = cam:VectorToWorldSpace(Vector3.new(0.25 * l, -0.75, -1).Unit)
+			codo = 0.15
+		elseif rodando then
+			objetivo = cam:VectorToWorldSpace(Vector3.new(0.3 * l, -1, 0.3).Unit)
+			codo = 1.6
 		else
-			d += Vector3.new(0, -0.2, 0.3) * golpe
+			local fase = estado.bob + (l == 1 and math.pi or 0)
+			local d = Vector3.new(0.18 * l, -0.42, -1)
+			d += Vector3.new(math.cos(fase) * 0.08 * l, 0, math.sin(fase) * 0.22) * andar -- brazos que van y vienen al correr
+			d += Vector3.new(estado.sway.X, estado.sway.Y, 0)
+			if enSlide then
+				d += Vector3.new(0.7 * l, -0.1, 0.4) -- se abren para equilibrarse
+				codo = 0.25
+			end
+			if not enSuelo then
+				d += Vector3.new(0.15 * l, 0.3, 0)
+			end
+			d += Vector3.new(0, 0.4, 0) * estado.salto
+			d += Vector3.new(0, -0.35, 0) * estado.aterrizaje
+			-- corriendo por la pared, la mano de ese lado la toca
+			if (pared > 0 and l == 1) or (pared < 0 and l == -1) then
+				d = Vector3.new(1.1 * l, 0.35, -0.6)
+				codo = 0.2
+			end
+			-- manotazo con la derecha
+			if l == 1 and golpe > 0 then
+				d = d:Lerp(Vector3.new(-0.15, -0.05, -1), golpe)
+				codo = lerp(codo, 0.05, golpe)
+			elseif l == -1 then
+				d += Vector3.new(0, -0.15, 0.2) * golpe
+			end
+			objetivo = cam:VectorToWorldSpace(d.Unit)
 		end
 
-		local mundo = cam:VectorToWorldSpace(d)
-		apuntarHombro(b.hombro, mundo, l == 1 and golpe * math.rad(70) or 0)
-		if b.codo then
-			-- codo un poco doblado; se estira al dar el manotazo
-			local doblez = math.rad(lerp(25, 5, golpe))
-			b.codo.Transform = CFrame.Angles(doblez, 0, 0)
+		-- suavizado (el manotazo va rápido)
+		local rapidez = golpe > 0.05 and 40 or (modo == "barra" and 20 or 14)
+		b.dir = b.dir:Lerp(objetivo, math.min(dt * rapidez, 1))
+		if b.dir.Magnitude < 0.01 then
+			b.dir = objetivo
 		end
-		for _, p in b.partes do
-			p.LocalTransparencyModifier = 0
-		end
-		-- accesorios pegados a los brazos (relojes, mangas, etc.)
-		for _, acc in char:GetChildren() do
-			if acc:IsA("Accessory") then
-				local h = acc:FindFirstChild("Handle")
-				local w = h and h:FindFirstChildWhichIsA("Weld")
-				if w and table.find(b.partes, w.Part1) then
-					h.LocalTransparencyModifier = 0
-				end
+		b.dir = b.dir.Unit
+		b.codo = lerp(b.codo, codo, math.min(dt * rapidez, 1))
+
+		-- cadena hombro → codo → mano
+		local lateral = cam.RightVector
+		local ejeCodo = unitLateral(lateral, -b.dir)
+		local punto = hombro
+		for i, p in b.piezas do
+			local dir = b.dir
+			if i >= 2 then
+				-- el antebrazo y la mano se doblan hacia arriba/dentro
+				dir = girar(b.dir, ejeCodo, b.codo)
 			end
+			punto = colocar(p, punto, dir, b.largos[i], lateral)
 		end
 	end
 end
 
-player.CharacterAdded:Connect(prepararPersonaje)
-if player.Character then
-	task.spawn(prepararPersonaje, player.Character)
+local function alAparecer(char)
+	char:WaitForChild("Humanoid")
+	if not player:HasAppearanceLoaded() then
+		player.CharacterAppearanceLoaded:Wait()
+	end
+	task.wait(0.1)
+	if player.Character == char then
+		construir()
+	end
 end
 
--- después de la cámara (que vuelve a esconder el cuerpo) y de las animaciones
+player.CharacterAdded:Connect(alAparecer)
+if player.Character then
+	task.spawn(alAparecer, player.Character)
+end
+
 RunService:BindToRenderStep("BrazosVista", Enum.RenderPriority.Camera.Value + 2, actualizar)

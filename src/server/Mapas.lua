@@ -1,326 +1,239 @@
--- Los mapas del pilla-pilla. Se construyen por código al arrancar el servidor
--- (así no hace falta modelar nada en Studio). Cada mapa es pequeño y vertical,
--- con paredes largas para correr por ellas.
+-- Mapas del juego. Se construyen por código al arrancar el servidor.
 --
--- Mapas.construir() crea todos y devuelve una lista:
---   { nombre, centro (Vector3), apariciones = {Vector3}, alturaMinima, puntos = {Vector3} }
--- "puntos" son sitios repartidos por el mapa que usan los bots para moverse.
+-- Fase 1: solo hay una PISTA DE PRUEBAS en estilo pastel para probar cada mecánica:
+-- bordes para escalar, pasillo de paredes, zigzag de saltos de pared, barras sobre un
+-- foso, torre alta para probar a rodar al caer y un tobogán para deslizar.
+-- En la fase 2 llegan el parque de calistenia y la torre de obras.
+--
+-- Mapas.construir() devuelve una lista de mapas:
+--   { nombre, apariciones = {Vector3}, alturaMinima, puntos = {Vector3} }
+-- "puntos" son sitios por los que pasean los bots.
+-- Las barras para columpiarse llevan la etiqueta "Barra" (CollectionService).
+
+local CollectionService = game:GetService("CollectionService")
+local Lighting = game:GetService("Lighting")
 
 local Mapas = {}
 
+-- Paleta pastel
+local P = {
+	suelo = Color3.fromRGB(246, 238, 228), -- crema
+	sueloB = Color3.fromRGB(236, 226, 214),
+	lila = Color3.fromRGB(205, 190, 238),
+	menta = Color3.fromRGB(178, 230, 210),
+	melocoton = Color3.fromRGB(255, 205, 178),
+	rosa = Color3.fromRGB(250, 196, 214),
+	cielo = Color3.fromRGB(176, 214, 245),
+	limon = Color3.fromRGB(250, 236, 168),
+	barra = Color3.fromRGB(120, 120, 150),
+}
+
 ------------------------------------------------------------------------
--- Ayudas para construir
+-- Ayudas
 ------------------------------------------------------------------------
 
-local function parte(padre, props)
+local function bloque(padre, tam, cf, color, props)
 	local p = Instance.new("Part")
 	p.Anchored = true
+	p.Size = tam
+	p.CFrame = typeof(cf) == "CFrame" and cf or CFrame.new(cf)
+	p.Color = color
+	p.Material = Enum.Material.SmoothPlastic
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
-	for k, v in props do
+	for k, v in props or {} do
 		p[k] = v
 	end
 	p.Parent = padre
 	return p
 end
 
-local function bloque(padre, tam, pos, color, material, extra)
-	local props = { Size = tam, CFrame = typeof(pos) == "CFrame" and pos or CFrame.new(pos), Color = color, Material = material or Enum.Material.SmoothPlastic }
-	for k, v in extra or {} do
-		props[k] = v
-	end
-	return parte(padre, props)
-end
-
--- barra cilíndrica entre dos puntos
-local function barra(padre, a, b, grosor, color)
-	local largo = (b - a).Magnitude
-	local p = parte(padre, {
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(largo, grosor, grosor),
-		CFrame = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, math.rad(90), 0),
-		Color = color,
-		Material = Enum.Material.Metal,
-	})
+-- cilindro entre dos puntos (su eje queda en X)
+local function cilindro(padre, a, b, grosor, color)
+	local p = bloque(padre, Vector3.new((b - a).Magnitude, grosor, grosor), CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, math.rad(90), 0), color)
+	p.Shape = Enum.PartType.Cylinder
 	return p
 end
 
-local function rampa(padre, desde, hasta, ancho, color, material)
-	-- rampa (cuña aplanada) de "desde" a "hasta", ambos a nivel de la superficie
+-- barra para columpiarse, con sus dos postes
+local function barraColumpio(padre, a, b, color)
+	local barra = cilindro(padre, a, b, 0.8, P.barra)
+	CollectionService:AddTag(barra, "Barra")
+	cilindro(padre, a, Vector3.new(a.X, 0, a.Z), 0.9, color)
+	cilindro(padre, b, Vector3.new(b.X, 0, b.Z), 0.9, color)
+	return barra
+end
+
+-- rampa de "desde" a "hasta" (puntos de la superficie)
+local function rampa(padre, desde, hasta, ancho, color)
 	local dir = hasta - desde
-	local plano = Vector3.new(dir.X, 0, dir.Z)
-	local largo = dir.Magnitude
 	local cf = CFrame.lookAt((desde + hasta) / 2, (desde + hasta) / 2 + dir)
-	return bloque(padre, Vector3.new(ancho, 1, largo), cf * CFrame.new(0, -0.5, 0), color, material)
+	return bloque(padre, Vector3.new(ancho, 1, dir.Magnitude), cf * CFrame.new(0, -0.5, 0), color)
+end
+
+local function letrero(padre, pos, texto)
+	local a = bloque(padre, Vector3.new(0.4, 0.4, 0.4), pos, P.suelo, { Transparency = 1, CanCollide = false, CanQuery = false })
+	local g = Instance.new("BillboardGui")
+	g.Size = UDim2.fromOffset(220, 40)
+	g.AlwaysOnTop = false
+	g.MaxDistance = 90
+	g.Parent = a
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.fromScale(1, 1)
+	t.BackgroundTransparency = 1
+	t.Font = Enum.Font.GothamBold
+	t.TextScaled = true
+	t.TextColor3 = Color3.fromRGB(110, 96, 140)
+	t.Text = texto
+	t.Parent = g
 end
 
 ------------------------------------------------------------------------
--- Mapa 1: Parque de calistenia y parkour
+-- Ambiente pastel: luz suave, niebla rosada, colores un poco lavados
 ------------------------------------------------------------------------
 
-local function parque(raiz, origen)
-	local m = Instance.new("Model")
-	m.Name = "ParqueCalistenia"
-	m.Parent = raiz
-	local o = origen
-
-	local CAUCHO = Color3.fromRGB(64, 120, 88)
-	local CAUCHO2 = Color3.fromRGB(196, 92, 60)
-	local HORMIGON = Color3.fromRGB(190, 186, 178)
-	local METAL = Color3.fromRGB(40, 44, 52)
-	local AMARILLO = Color3.fromRGB(240, 196, 60)
-	local MADERA = Color3.fromRGB(160, 116, 74)
-
-	-- suelo de caucho con césped alrededor
-	bloque(m, Vector3.new(260, 2, 260), o + Vector3.new(0, -1, 0), Color3.fromRGB(96, 160, 72), Enum.Material.Grass)
-	bloque(m, Vector3.new(170, 0.4, 170), o + Vector3.new(0, 0.2, 0), CAUCHO, Enum.Material.Fabric)
-	for i = -2, 2 do
-		bloque(m, Vector3.new(170, 0.42, 3), o + Vector3.new(0, 0.21, i * 34), CAUCHO2, Enum.Material.Fabric)
-	end
-
-	-- valla perimetral (muy alta para no salir)
-	for _, lado in { { Vector3.new(0, 0, 90), Vector3.new(184, 40, 1) }, { Vector3.new(0, 0, -90), Vector3.new(184, 40, 1) }, { Vector3.new(90, 0, 0), Vector3.new(1, 40, 184) }, { Vector3.new(-90, 0, 0), Vector3.new(1, 40, 184) } } do
-		bloque(m, lado[2], o + lado[1] + Vector3.new(0, 20, 0), METAL, Enum.Material.DiamondPlate, { Transparency = 0.6 })
-	end
-
-	-- 1. Muros de parkour para correr por ellos (pares paralelos con hueco en medio)
-	local muros = {
-		{ Vector3.new(-50, 0, -55), 0 },
-		{ Vector3.new(50, 0, 55), 0 },
-		{ Vector3.new(-62, 0, 30), 90 },
-		{ Vector3.new(62, 0, -30), 90 },
-	}
-	for _, mu in muros do
-		local cf = CFrame.new(o + mu[1]) * CFrame.Angles(0, math.rad(mu[2]), 0)
-		bloque(m, Vector3.new(44, 16, 2), cf * CFrame.new(0, 8, -9), HORMIGON, Enum.Material.Concrete)
-		bloque(m, Vector3.new(44, 16, 2), cf * CFrame.new(0, 8, 9), HORMIGON, Enum.Material.Concrete)
-		-- franja de color en lo alto, para ver bien los muros
-		bloque(m, Vector3.new(44, 1, 2.2), cf * CFrame.new(0, 16, -9), AMARILLO)
-		bloque(m, Vector3.new(44, 1, 2.2), cf * CFrame.new(0, 16, 9), AMARILLO)
-	end
-
-	-- 2. Torre central de barras: tres pisos de plataformas unidas por barras
-	local tc = o + Vector3.new(0, 0, 0)
-	for _, x in { -14, 14 } do
-		for _, z in { -14, 14 } do
-			barra(m, tc + Vector3.new(x, 0, z), tc + Vector3.new(x, 38, z), 1.4, METAL)
+local function ambiente()
+	for _, v in Lighting:GetChildren() do
+		if v:IsA("Sky") or v:IsA("Atmosphere") or v:IsA("PostEffect") then
+			v:Destroy()
 		end
 	end
-	for i, y in { 10, 20, 30 } do
-		local hueco = (i % 2 == 0) and -1 or 1
-		-- plataforma con un hueco por el que subir saltando
-		bloque(m, Vector3.new(30, 1, 18), tc + Vector3.new(0, y, 6 * hueco), MADERA, Enum.Material.WoodPlanks)
-		for _, x in { -14, 14 } do
-			barra(m, tc + Vector3.new(x, y + 4, -14), tc + Vector3.new(x, y + 4, 14), 0.8, METAL)
-		end
-	end
-	-- techo de la torre: el sitio más alto del parque
-	bloque(m, Vector3.new(32, 1, 32), tc + Vector3.new(0, 39, 0), CAUCHO2, Enum.Material.Fabric)
-	-- cajas para subir a la primera plataforma
-	bloque(m, Vector3.new(8, 4, 8), tc + Vector3.new(-22, 2, 6), MADERA, Enum.Material.WoodPlanks)
-	bloque(m, Vector3.new(8, 7, 8), tc + Vector3.new(-22, 3.5, -4), MADERA, Enum.Material.WoodPlanks)
-	bloque(m, Vector3.new(8, 4, 8), tc + Vector3.new(22, 2, -6), MADERA, Enum.Material.WoodPlanks)
+	Lighting.ClockTime = 14.5
+	Lighting.Brightness = 2.2
+	Lighting.Ambient = Color3.fromRGB(150, 140, 165)
+	Lighting.OutdoorAmbient = Color3.fromRGB(190, 180, 205)
+	Lighting.EnvironmentDiffuseScale = 0.6
+	Lighting.EnvironmentSpecularScale = 0.2
+	Lighting.GlobalShadows = true
+	Lighting.ShadowSoftness = 0.6
 
-	-- 3. Barras de dominadas en fila (para pasar por debajo deslizando o saltar encima)
-	for i = 0, 4 do
-		local z = -70 + i * 9
-		local x = 20
-		barra(m, o + Vector3.new(x - 6, 0, z), o + Vector3.new(x - 6, 9 + i, z), 0.8, METAL)
-		barra(m, o + Vector3.new(x + 6, 0, z), o + Vector3.new(x + 6, 9 + i, z), 0.8, METAL)
-		barra(m, o + Vector3.new(x - 6, 9 + i, z), o + Vector3.new(x + 6, 9 + i, z), 0.6, METAL)
-	end
+	local atm = Instance.new("Atmosphere")
+	atm.Density = 0.28
+	atm.Offset = 0.1
+	atm.Color = Color3.fromRGB(255, 226, 236)
+	atm.Decay = Color3.fromRGB(200, 186, 230)
+	atm.Glare = 0.2
+	atm.Haze = 1.2
+	atm.Parent = Lighting
 
-	-- 4. Escalera horizontal (pasamanos) elevada que hace de puente
-	local a, b = o + Vector3.new(-40, 0, 70), o + Vector3.new(-40, 0, 40)
-	for _, x in { -3, 3 } do
-		barra(m, a + Vector3.new(x, 0, 0), a + Vector3.new(x, 12, 0), 0.8, METAL)
-		barra(m, b + Vector3.new(x, 0, 0), b + Vector3.new(x, 12, 0), 0.8, METAL)
-		barra(m, a + Vector3.new(x, 12, 0), b + Vector3.new(x, 12, 0), 0.7, METAL)
-	end
-	for z = 0, 10 do
-		barra(m, a + Vector3.new(-3, 12, -z * 3), a + Vector3.new(3, 12, -z * 3), 0.4, AMARILLO)
-	end
+	local cc = Instance.new("ColorCorrectionEffect")
+	cc.Brightness = 0.04
+	cc.Contrast = -0.05
+	cc.Saturation = -0.12
+	cc.TintColor = Color3.fromRGB(255, 248, 252)
+	cc.Parent = Lighting
 
-	-- 5. Cajones pliométricos escalonados
-	for i, h in { 3, 5, 8, 11, 14 } do
-		bloque(m, Vector3.new(7, h, 7), o + Vector3.new(-75 + i * 9, h / 2, -20), i % 2 == 0 and CAUCHO2 or MADERA, Enum.Material.WoodPlanks)
-	end
-
-	-- 6. Paralelas y bancos inclinados (para deslizar)
-	for i = 0, 2 do
-		local base = o + Vector3.new(70, 0, 0 + i * 14)
-		barra(m, base + Vector3.new(-8, 4, -2), base + Vector3.new(8, 4, -2), 0.6, METAL)
-		barra(m, base + Vector3.new(-8, 4, 2), base + Vector3.new(8, 4, 2), 0.6, METAL)
-		for _, x in { -8, 8 } do
-			barra(m, base + Vector3.new(x, 0, -2), base + Vector3.new(x, 4, -2), 0.6, METAL)
-			barra(m, base + Vector3.new(x, 0, 2), base + Vector3.new(x, 4, 2), 0.6, METAL)
-		end
-	end
-	rampa(m, o + Vector3.new(30, 0.4, 20), o + Vector3.new(30, 9, 44), 10, HORMIGON, Enum.Material.Concrete)
-	bloque(m, Vector3.new(10, 9, 14), o + Vector3.new(30, 4.5, 51), HORMIGON, Enum.Material.Concrete)
-
-	-- 7. Árboles de decoración por fuera
-	for i = 0, 11 do
-		local ang = i / 12 * math.pi * 2
-		local p = o + Vector3.new(math.cos(ang) * 115, 0, math.sin(ang) * 115)
-		bloque(m, Vector3.new(2.5, 14, 2.5), p + Vector3.new(0, 7, 0), Color3.fromRGB(110, 76, 50), Enum.Material.Wood)
-		parte(m, { Shape = Enum.PartType.Ball, Size = Vector3.new(14, 14, 14), Position = p + Vector3.new(0, 18, 0), Color = Color3.fromRGB(70, 140, 60), Material = Enum.Material.Grass })
-	end
-
-	local apariciones, puntos = {}, {}
-	for i = 0, 7 do
-		local ang = i / 8 * math.pi * 2
-		table.insert(apariciones, o + Vector3.new(math.cos(ang) * 60, 4, math.sin(ang) * 60))
-	end
-	for x = -70, 70, 28 do
-		for z = -70, 70, 28 do
-			table.insert(puntos, o + Vector3.new(x, 3, z))
-		end
-	end
-	table.insert(puntos, tc + Vector3.new(0, 12, 6))
-	table.insert(puntos, tc + Vector3.new(0, 41, 0))
-
-	return { nombre = "Parque de calistenia", modelo = m, centro = o, apariciones = apariciones, alturaMinima = o.Y - 30, puntos = puntos }
+	local bloom = Instance.new("BloomEffect")
+	bloom.Intensity = 0.4
+	bloom.Size = 30
+	bloom.Threshold = 1.6
+	bloom.Parent = Lighting
 end
 
 ------------------------------------------------------------------------
--- Mapa 2: Torre de obras
+-- Pista de pruebas (circuito en bucle)
 ------------------------------------------------------------------------
+--
+--   Vista desde arriba (Z hacia abajo):
+--
+--     [Bordes]  →  [Pasillo de paredes]  →  [Zigzag de muros]
+--        ↑                                         ↓
+--     [Tobogán] ←  [Torre para rodar]  ←  [Barras sobre el foso]
 
-local function obras(raiz, origen)
+local function pista(raiz)
 	local m = Instance.new("Model")
-	m.Name = "TorreObras"
+	m.Name = "PistaPruebas"
 	m.Parent = raiz
-	local o = origen
 
-	local TIERRA = Color3.fromRGB(150, 118, 84)
-	local HORMIGON = Color3.fromRGB(168, 166, 160)
-	local ACERO = Color3.fromRGB(214, 120, 40)
-	local ANDAMIO = Color3.fromRGB(110, 116, 126)
-	local TABLON = Color3.fromRGB(176, 140, 90)
-	local AMARILLO = Color3.fromRGB(245, 200, 40)
-	local AZUL = Color3.fromRGB(40, 90, 160)
-
-	-- solar de obra
-	bloque(m, Vector3.new(220, 2, 220), o + Vector3.new(0, -1, 0), TIERRA, Enum.Material.Ground)
-	for _, lado in { { Vector3.new(0, 0, 80), Vector3.new(164, 40, 1) }, { Vector3.new(0, 0, -80), Vector3.new(164, 40, 1) }, { Vector3.new(80, 0, 0), Vector3.new(1, 40, 164) }, { Vector3.new(-80, 0, 0), Vector3.new(1, 40, 164) } } do
-		bloque(m, lado[2], o + lado[1] + Vector3.new(0, 20, 0), Color3.fromRGB(230, 230, 230), Enum.Material.SmoothPlastic, { Transparency = 0.7 })
-	end
-
-	-- el edificio: 6 forjados de 56x56, 16 de altura entre plantas
-	local ALTURA, LADO, PISOS = 16, 56, 6
-	for piso = 0, PISOS do
-		local y = piso * ALTURA
-		if piso > 0 then
-			-- forjado con un hueco de escalera que cambia de esquina en cada planta
-			local hx = (piso % 2 == 0) and 1 or -1
-			bloque(m, Vector3.new(LADO, 1.2, LADO - 14), o + Vector3.new(0, y, -7 * hx), HORMIGON, Enum.Material.Concrete)
-			bloque(m, Vector3.new(LADO - 16, 1.2, 14), o + Vector3.new(-8 * hx, y, (LADO / 2 - 7) * hx), HORMIGON, Enum.Material.Concrete)
-		end
-		if piso < PISOS then
-			-- pilares
-			for _, x in { -26, 0, 26 } do
-				for _, z in { -26, 0, 26 } do
-					if not (x == 0 and z == 0) then
-						bloque(m, Vector3.new(2.5, ALTURA, 2.5), o + Vector3.new(x, y + ALTURA / 2, z), HORMIGON, Enum.Material.Concrete)
-					end
-				end
-			end
-			-- tabiques sueltos para correr por ellos (cambian de sitio en cada planta)
-			local giro = piso * 47 % 180
-			local cf = CFrame.new(o + Vector3.new(0, y + 6.5, 0)) * CFrame.Angles(0, math.rad(giro), 0)
-			bloque(m, Vector3.new(30, 11, 1.5), cf * CFrame.new(0, 0, -11), AZUL, Enum.Material.Brick)
-			bloque(m, Vector3.new(30, 11, 1.5), cf * CFrame.new(0, 0, 11), AZUL, Enum.Material.Brick)
-			-- rampa de una planta a la siguiente dentro del hueco
-			local hx = ((piso + 1) % 2 == 0) and 1 or -1
-			local ini = o + Vector3.new((LADO / 2 - 10) * hx, y + 0.6, (LADO / 2 - 30) * hx)
-			local fin = o + Vector3.new((LADO / 2 - 10) * hx, y + ALTURA + 0.6, (LADO / 2 - 2) * hx)
-			rampa(m, ini, fin, 12, TABLON, Enum.Material.WoodPlanks)
+	-- suelo con baldosas suaves
+	for i = -4, 3 do
+		for j = -3, 2 do
+			bloque(m, Vector3.new(40, 2, 40), Vector3.new(i * 40 + 20, -1, j * 40 + 20), (i + j) % 2 == 0 and P.suelo or P.sueloB)
 		end
 	end
-	-- azotea con barandilla baja
-	local top = PISOS * ALTURA
-	for _, cfg in { { Vector3.new(0, 0, 28), Vector3.new(56, 3, 1) }, { Vector3.new(0, 0, -28), Vector3.new(56, 3, 1) }, { Vector3.new(28, 0, 0), Vector3.new(1, 3, 56) }, { Vector3.new(-28, 0, 0), Vector3.new(1, 3, 56) } } do
-		bloque(m, cfg[2], o + cfg[1] + Vector3.new(0, top + 2, 0), AMARILLO)
+	-- valla baja alrededor
+	for _, v in { { Vector3.new(0, 2, 120), Vector3.new(322, 4, 2) }, { Vector3.new(0, 2, -120), Vector3.new(322, 4, 2) }, { Vector3.new(160, 2, 0), Vector3.new(2, 4, 242) }, { Vector3.new(-160, 2, 0), Vector3.new(2, 4, 242) } } do
+		bloque(m, v[2], v[1], P.lila)
 	end
 
-	-- andamios por fuera, en dos caras: plataformas de tablones cada media planta
-	for _, cara in { 1, -1 } do
-		local x = cara * (LADO / 2 + 6)
-		for z = -24, 24, 12 do
-			barra(m, o + Vector3.new(x - 3, 0, z), o + Vector3.new(x - 3, top, z), 0.5, ANDAMIO)
-			barra(m, o + Vector3.new(x + 3, 0, z), o + Vector3.new(x + 3, top, z), 0.5, ANDAMIO)
-		end
-		for nivel = 1, PISOS * 2 - 1 do
-			local y = nivel * ALTURA / 2
-			-- tablones a tramos, alternando, para obligar a saltar
-			local desfase = (nivel % 2 == 0) and 6 or -6
-			bloque(m, Vector3.new(6, 0.6, 22), o + Vector3.new(x, y, -14 + desfase), TABLON, Enum.Material.WoodPlanks)
-			bloque(m, Vector3.new(6, 0.6, 14), o + Vector3.new(x, y, 18 + desfase), TABLON, Enum.Material.WoodPlanks)
-			barra(m, o + Vector3.new(x + 3, y + 3.5, -24), o + Vector3.new(x + 3, y + 3.5, 24), 0.4, ANDAMIO)
-		end
+	-- 1. BORDES PARA ESCALAR (alturas 3, 5 y 7)
+	letrero(m, Vector3.new(-120, 12, -90), "Escalar bordes")
+	for i, h in { 3, 5, 7 } do
+		bloque(m, Vector3.new(14, h, 14), Vector3.new(-140 + i * 16, h / 2, -90), ({ P.melocoton, P.rosa, P.lila })[i])
 	end
-	-- lona en la otra cara: una pared enorme para correr
-	bloque(m, Vector3.new(LADO, top - 4, 0.6), o + Vector3.new(0, top / 2, LADO / 2 + 5), Color3.fromRGB(60, 140, 90), Enum.Material.Fabric)
-	bloque(m, Vector3.new(LADO, top - 4, 0.6), o + Vector3.new(0, top / 2, -LADO / 2 - 5), Color3.fromRGB(60, 140, 90), Enum.Material.Fabric)
 
-	-- grúa torre al lado, con la pluma pasando por encima de la azotea
-	local g = o + Vector3.new(-58, 0, -50)
-	for _, dx in { -2, 2 } do
-		for _, dz in { -2, 2 } do
-			barra(m, g + Vector3.new(dx, 0, dz), g + Vector3.new(dx, top + 24, dz), 0.6, AMARILLO)
-		end
-	end
-	for y = 4, top + 20, 8 do
-		bloque(m, Vector3.new(5, 0.4, 5), g + Vector3.new(0, y, 0), AMARILLO, Enum.Material.DiamondPlate)
-	end
-	-- la pluma: una pasarela larga a gran altura
-	local pluma = CFrame.lookAt(g + Vector3.new(0, top + 24, 0), o + Vector3.new(30, top + 24, 40))
-	bloque(m, Vector3.new(4, 1, 120), pluma * CFrame.new(0, 0, -50), AMARILLO, Enum.Material.DiamondPlate)
-	bloque(m, Vector3.new(6, 4, 14), pluma * CFrame.new(0, -2, 16), HORMIGON, Enum.Material.Concrete) -- contrapeso
-	-- carga colgando a mitad de pluma (plataforma de paso)
-	bloque(m, Vector3.new(12, 1, 8), pluma * CFrame.new(0, -14, -60), TABLON, Enum.Material.WoodPlanks)
-	barra(m, (pluma * CFrame.new(0, 0, -60)).Position, (pluma * CFrame.new(0, -14, -60)).Position, 0.3, Color3.fromRGB(30, 30, 30))
+	-- 2. PASILLO DE PAREDES (correr por la pared)
+	letrero(m, Vector3.new(-40, 22, -90), "Correr por la pared")
+	bloque(m, Vector3.new(60, 18, 2), Vector3.new(-40, 9, -98), P.menta)
+	bloque(m, Vector3.new(60, 18, 2), Vector3.new(-40, 9, -82), P.cielo)
+	-- foso bajo el pasillo para obligar a ir por la pared
+	bloque(m, Vector3.new(50, 0.2, 14), Vector3.new(-40, 0.1, -90), P.rosa)
 
-	-- contenedores y vigas por el suelo
-	local colores = { Color3.fromRGB(180, 50, 40), Color3.fromRGB(40, 110, 170), Color3.fromRGB(60, 140, 70) }
+	-- 3. ZIGZAG DE MUROS (saltar de pared a pared hacia arriba)
+	letrero(m, Vector3.new(60, 30, -90), "Salto de pared")
 	for i = 0, 5 do
-		local ang = i / 6 * math.pi * 2 + 0.4
-		local p = o + Vector3.new(math.cos(ang) * 58, 0, math.sin(ang) * 58)
-		local cf = CFrame.new(p) * CFrame.Angles(0, ang, 0)
-		bloque(m, Vector3.new(8, 8.5, 20), cf * CFrame.new(0, 4.25, 0), colores[i % 3 + 1], Enum.Material.CorrodedMetal)
-		if i % 2 == 0 then
-			bloque(m, Vector3.new(8, 8.5, 20), cf * CFrame.new(0, 12.75, 3), colores[(i + 1) % 3 + 1], Enum.Material.CorrodedMetal)
-		end
+		local lado = i % 2 == 0 and -1 or 1
+		bloque(m, Vector3.new(10, 14, 2), Vector3.new(40 + i * 8, 7 + i * 3, -90 + lado * 6), i % 2 == 0 and P.lila or P.menta)
 	end
-	for i = 0, 3 do
-		bloque(m, Vector3.new(1.5, 2, 26), CFrame.new(o + Vector3.new(44, 1 + i * 2, -10 + i)) * CFrame.Angles(0, math.rad(i * 12), 0), ACERO, Enum.Material.Metal)
+	bloque(m, Vector3.new(20, 1, 20), Vector3.new(95, 24, -90), P.limon) -- meta arriba
+
+	-- 4. BARRAS SOBRE EL FOSO (columpiarse)
+	letrero(m, Vector3.new(120, 22, 0), "Barras")
+	-- plataforma de salida
+	bloque(m, Vector3.new(20, 10, 20), Vector3.new(120, 5, -50), P.melocoton)
+	rampa(m, Vector3.new(120, 0, -20), Vector3.new(120, 10, -40), 8, P.melocoton)
+	-- foso de "agua" (si caes, no pasa nada, solo pierdes tiempo)
+	bloque(m, Vector3.new(24, 0.3, 60), Vector3.new(120, 0.15, 10), P.cielo, { Material = Enum.Material.Glass, Transparency = 0.2 })
+	for k = 0, 3 do
+		local z = -28 + k * 16
+		local y = 15 - (k % 2) * 2
+		barraColumpio(m, Vector3.new(112, y, z), Vector3.new(128, y, z), P.lila)
+	end
+	bloque(m, Vector3.new(20, 8, 16), Vector3.new(120, 4, 48), P.melocoton)
+
+	-- 5. TORRE PARA RODAR (sube por los bordes y déjate caer pulsando slide al llegar)
+	letrero(m, Vector3.new(40, 40, 90), "Cae y pulsa slide para rodar")
+	local escalones = { 4, 9, 14, 19, 24, 30 }
+	for i, h in escalones do
+		bloque(m, Vector3.new(10, h, 10), Vector3.new(90 - i * 10, h / 2, 90), i % 2 == 0 and P.rosa or P.lila)
+	end
+	bloque(m, Vector3.new(14, 1, 14), Vector3.new(30 - 2, 30.5, 90), P.limon)
+
+	-- 6. TOBOGÁN PARA DESLIZAR (empieza alto y baja hasta el inicio)
+	letrero(m, Vector3.new(-60, 26, 90), "Desliza cuesta abajo")
+	bloque(m, Vector3.new(14, 20, 14), Vector3.new(-20, 10, 90), P.menta)
+	-- escalera de bordes para subir al tobogán
+	for i, h in { 5, 10, 15 } do
+		bloque(m, Vector3.new(8, h, 8), Vector3.new(-20 + i * 9, h / 2, 104), P.melocoton)
+	end
+	rampa(m, Vector3.new(-27, 20, 90), Vector3.new(-110, 0.2, 90), 12, P.cielo)
+	rampa(m, Vector3.new(-110, 0.2, 90), Vector3.new(-125, 6, 70), 12, P.rosa) -- pequeña subida final (salto)
+
+	-- decoración: nubes de algodón alrededor
+	for i = 0, 9 do
+		local a = i / 10 * math.pi * 2
+		local c = Vector3.new(math.cos(a) * 230, 40 + (i % 3) * 12, math.sin(a) * 170)
+		for k = 0, 2 do
+			local bola = bloque(m, Vector3.one * (16 + k * 6), c + Vector3.new(k * 10 - 10, k % 2 * 4, 0), Color3.fromRGB(255, 250, 252), { CanCollide = false, CanQuery = false, CastShadow = false })
+			bola.Shape = Enum.PartType.Ball
+		end
 	end
 
 	local apariciones, puntos = {}, {}
 	for i = 0, 7 do
-		local ang = i / 8 * math.pi * 2
-		table.insert(apariciones, o + Vector3.new(math.cos(ang) * 45, 4, math.sin(ang) * 45))
+		table.insert(apariciones, Vector3.new(-100 + i * 25, 4, 30))
 	end
-	for piso = 0, PISOS do
-		for _, x in { -18, 18 } do
-			for _, z in { -18, 18 } do
-				table.insert(puntos, o + Vector3.new(x, piso * ALTURA + 3, z))
-			end
+	for x = -140, 140, 35 do
+		for z = -100, 100, 40 do
+			table.insert(puntos, Vector3.new(x, 3, z))
 		end
 	end
-	for i = 0, 7 do
-		local ang = i / 8 * math.pi * 2
-		table.insert(puntos, o + Vector3.new(math.cos(ang) * 50, 3, math.sin(ang) * 50))
-	end
-
-	return { nombre = "Torre de obras", modelo = m, centro = o, apariciones = apariciones, alturaMinima = o.Y - 30, puntos = puntos }
+	return { nombre = "Pista de pruebas", apariciones = apariciones, alturaMinima = -30, puntos = puntos }
 end
 
 ------------------------------------------------------------------------
 
 function Mapas.construir()
-	-- quitar lo que trae la plantilla Baseplate
 	for _, nombre in { "Baseplate", "SpawnLocation", "Mapas" } do
 		local v = workspace:FindFirstChild(nombre)
 		if v then
@@ -331,27 +244,19 @@ function Mapas.construir()
 	raiz.Name = "Mapas"
 	raiz.Parent = workspace
 
-	local lista = {
-		parque(raiz, Vector3.new(0, 0, 0)),
-		obras(raiz, Vector3.new(600, 0, 0)),
-	}
+	ambiente()
+	local lista = { pista(raiz) }
 
-	-- aparición entre rondas: en el parque
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "SpawnLocation"
 	spawn.Anchored = true
 	spawn.Size = Vector3.new(10, 1, 10)
-	spawn.Position = Vector3.new(0, 0.5, 70)
+	spawn.Position = Vector3.new(0, 0.5, 30)
 	spawn.Transparency = 1
 	spawn.CanCollide = false
 	spawn.Neutral = true
 	spawn.Duration = 0
 	spawn.Parent = raiz
-
-	local luz = game:GetService("Lighting")
-	luz.ClockTime = 15.5
-	luz.Brightness = 2.5
-	luz.OutdoorAmbient = Color3.fromRGB(140, 140, 150)
 
 	return lista
 end

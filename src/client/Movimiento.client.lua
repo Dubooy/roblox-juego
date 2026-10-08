@@ -1,14 +1,25 @@
--- Controlador de movimiento en primera persona: dash, slide, doble salto,
--- coyote time, buffer de salto y bunny-hop. Va en StarterPlayerScripts.
+-- Movimiento en primera persona: ritmo medio y con peso, velocidad por inercia.
 --
--- Idea: el Humanoid sigue encargándose de la gravedad, las colisiones y el suelo,
--- pero la velocidad horizontal la calculamos nosotros y la imponemos con un
--- LinearVelocity que solo actúa en X y Z. Así el movimiento conserva el impulso.
+-- Mecánicas:
+--   · Correr y saltar (el salto solo desde el suelo).
+--   · Slide: en llano frena poco; cuesta abajo acelera.
+--   · Pared: corres por ella si vas rápido y en paralelo; desde cualquier muro cercano
+--     puedes saltar en el aire (es el único "doble salto"). Cada salto de pared suma velocidad.
+--   · Escalar bordes: si llegas a un borde alcanzable empujando hacia él, te agarras y subes.
+--   · Barras (etiqueta "Barra"): te agarras en el aire, te columpias (W/S para bombear)
+--     y al saltar sales lanzado con más velocidad. Slide para soltarte sin más.
+--   · Aterrizaje: desde muy alto, pulsa slide justo antes de tocar suelo para rodar y
+--     ganar velocidad; si no, el golpe te frena.
+--
+-- El Humanoid se encarga de colisiones y gravedad; la velocidad horizontal la calcula
+-- este script y la aplica con un LinearVelocity en X y Z.
+-- Publica su estado en atributos del jugador (Mov*) para los brazos y el servidor.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ContextActionService = game:GetService("ContextActionService")
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
@@ -17,101 +28,101 @@ local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 local controls = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule")):GetControls()
 
-player.CameraMode = Enum.CameraMode.LockFirstPerson
-UserInputService.MouseIconEnabled = false
-
 local PRIORIDAD = Enum.ContextActionPriority.High.Value
-
-------------------------------------------------------------------------
--- Estado
-------------------------------------------------------------------------
+local UP = Vector3.yAxis
 
 local humanoid, root, linVel
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
-local s = {} -- estado del movimiento; se reinicia en cada aparición
+local s = {} -- estado; se reinicia en cada aparición
 
 local function resetState()
+	s.modo = "normal" -- "normal" | "escalar" | "barra"
 	s.wasGrounded = false
 	s.lastGroundedAt = -math.huge
 	s.lastJumpAt = -math.huge
 	s.jumpBufferedAt = -math.huge
 	s.lastJumpRequest = -math.huge
-	s.airJumpsLeft = C.AIR_JUMPS
 	s.lastAirVelY = 0
 
-	s.dashCharges = C.DASH_CHARGES
-	s.dashQueued = false
-	s.dashing = false
-	s.dashEndsAt = -math.huge
-	s.dashDir = Vector3.zero
-	s.dashExitSpeed = 0
-
 	s.slideHeld = false
+	s.slidePressedAt = -math.huge
 	s.sliding = false
-	s.lastSlideBoostAt = -math.huge
+
+	s.wallrun = nil -- { normal, lado, hasta }
+	s.wallrunLado = 0
+	s.ultimaPared = nil -- normal del último muro usado (no repetir el mismo sin tocar suelo)
+
+	s.escalar = nil -- { desde, hasta, inicio, duracion, salida }
+	s.barra = nil -- { punto, eje, frente, theta, omega }
+	s.barraSoltadaAt = -math.huge
+
+	s.rodandoHasta = -math.huge
+	s.rodarInicio = -math.huge
+	s.aturdidoHasta = -math.huge
+
+	s.combo = 0
+	s.comboUltimoAt = -math.huge
+
+	s.empujePendiente = nil
+	s.empujeHasta = -math.huge
 
 	s.fovPunch = 0
 	s.landDip = 0
 	s.roll = 0
 	s.speed = 0
-
-	s.wallrun = nil -- { normal, lado, hasta }
-	s.wallrunLado = 0
-	s.ultimaPared = nil -- normal de la última pared (no se puede volver a la misma sin tocar suelo)
-	s.wallrunBloqueadoHasta = -math.huge
-
-	s.empujePendiente = nil
-	s.empujeHasta = -math.huge
 end
 resetState()
 
 ------------------------------------------------------------------------
--- Física
+-- Utilidades
 ------------------------------------------------------------------------
 
 local function flat(v)
 	return Vector3.new(v.X, 0, v.Z)
 end
 
--- Acelera hacia wishDir sin pasar de wishSpeed en esa dirección (estilo Quake).
--- La velocidad que ya llevas en otras direcciones no se toca: por eso existe el bunny-hop.
+local function unitOr(v, alt)
+	return v.Magnitude > 0.001 and v.Unit or alt
+end
+
 local function accelerate(vel, wishDir, wishSpeed, accel, dt)
-	if wishDir.Magnitude < 0.01 then
+	if wishDir.Magnitude == 0 then
 		return vel
 	end
-	local add = wishSpeed - vel:Dot(wishDir)
+	local current = vel:Dot(wishDir)
+	local add = wishSpeed - current
 	if add <= 0 then
 		return vel
 	end
-	return vel + wishDir * math.min(accel * C.WALK_SPEED * dt, add)
+	return vel + wishDir * math.min(accel * wishSpeed * dt, add)
 end
 
 local function applyFriction(vel, amount, dt)
 	local speed = vel.Magnitude
-	if speed < 0.1 then
+	if speed < 0.01 then
 		return Vector3.zero
 	end
 	local drop = math.max(speed, C.STOP_SPEED) * amount * dt
 	return vel * (math.max(speed - drop, 0) / speed)
 end
 
--- Gira el impulso hacia donde pulsas conservando la velocidad (solo si no vas hacia atrás).
+-- gira la velocidad hacia wishDir sin cambiar su módulo
 local function steer(vel, wishDir, rate, dt)
 	local speed = vel.Magnitude
-	if speed < 0.1 or wishDir.Magnitude < 0.01 then
+	if speed < 0.01 or wishDir.Magnitude == 0 then
 		return vel
 	end
 	local dir = vel / speed
-	if dir:Dot(wishDir) <= 0 then
+	if dir:Dot(wishDir) < -0.2 then
 		return vel
 	end
-	local newDir = dir:Lerp(wishDir, math.clamp(rate * dt, 0, 1))
-	if newDir.Magnitude < 0.001 then
-		return vel
-	end
-	return newDir.Unit * speed
+	return unitOr(dir:Lerp(wishDir, math.clamp(rate * dt, 0, 1)), dir) * speed
+end
+
+local function feetY()
+	return root.Position.Y - (humanoid.HipHeight + root.Size.Y / 2)
 end
 
 local function groundHit()
@@ -119,10 +130,27 @@ local function groundHit()
 	return workspace:Raycast(root.Position, Vector3.new(0, -reach, 0), rayParams)
 end
 
--- Busca una pared a la izquierda o a la derecha según hacia dónde vas.
--- Devuelve normal, lado (-1 izquierda, 1 derecha) o nil.
-local function buscarPared(adelante)
-	local derecha = adelante:Cross(Vector3.yAxis)
+local function wishDirection()
+	local move = controls:GetMoveVector() -- x = derecha, z = -adelante
+	if move.Magnitude < 0.01 then
+		return Vector3.zero
+	end
+	local look = flat(camera.CFrame.LookVector)
+	local right = flat(camera.CFrame.RightVector)
+	if look.Magnitude < 0.01 then
+		return Vector3.zero
+	end
+	return unitOr(look.Unit * -move.Z + right.Unit * move.X, Vector3.zero)
+end
+
+local function sumarCombo(now)
+	s.combo += 1
+	s.comboUltimoAt = now
+end
+
+-- muro a izquierda o derecha según hacia dónde vas → normal, lado
+local function paredLateral(adelante)
+	local derecha = adelante:Cross(UP)
 	for _, lado in { 1, -1 } do
 		local hit = workspace:Raycast(root.Position, derecha * lado * C.WALLRUN_DISTANCIA, rayParams)
 		if hit and math.abs(hit.Normal.Y) < 0.3 then
@@ -132,18 +160,179 @@ local function buscarPared(adelante)
 	return nil
 end
 
-local function wishDirection()
-	local move = controls:GetMoveVector() -- x = derecha, z = -adelante (teclado, mando y táctil)
-	if move.Magnitude < 0.01 then
-		return Vector3.zero
+-- cualquier muro cerca (8 direcciones) → normal
+local function muroCercano()
+	local mejor, mejorDist = nil, math.huge
+	for i = 0, 7 do
+		local a = i / 8 * math.pi * 2
+		local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+		local hit = workspace:Raycast(root.Position, dir * C.MURO_SALTO_DISTANCIA, rayParams)
+		if hit and math.abs(hit.Normal.Y) < 0.3 and hit.Distance < mejorDist then
+			mejor, mejorDist = hit.Normal, hit.Distance
+		end
 	end
-	local look = flat(camera.CFrame.LookVector)
-	local right = flat(camera.CFrame.RightVector)
-	if look.Magnitude < 0.01 then
-		return Vector3.zero
+	return mejor
+end
+
+------------------------------------------------------------------------
+-- Escalar bordes
+------------------------------------------------------------------------
+
+local function buscarBorde(adelante)
+	-- 1) pared delante, a la altura del pecho
+	local pecho = root.Position
+	local hitPared = workspace:Raycast(pecho, adelante * C.ESCALAR_ALCANCE, rayParams)
+	if not hitPared or math.abs(hitPared.Normal.Y) > 0.3 then
+		-- también a la altura de la cintura (bordes bajos)
+		hitPared = workspace:Raycast(pecho - Vector3.new(0, 1.5, 0), adelante * C.ESCALAR_ALCANCE, rayParams)
+		if not hitPared or math.abs(hitPared.Normal.Y) > 0.3 then
+			return nil
+		end
 	end
-	local dir = look.Unit * -move.Z + right.Unit * move.X
-	return dir.Magnitude > 0.01 and dir.Unit or Vector3.zero
+	local dentro = -flat(hitPared.Normal).Unit
+	-- 2) desde arriba, bajar justo detrás del borde para encontrar la superficie
+	local pies = feetY()
+	local arriba = Vector3.new(hitPared.Position.X, pies + C.ESCALAR_ALTURA_MAX + 0.5, hitPared.Position.Z) + dentro * 1.2
+	local hitSuelo = workspace:Raycast(arriba, Vector3.new(0, -(C.ESCALAR_ALTURA_MAX + 0.5), 0), rayParams)
+	if not hitSuelo or hitSuelo.Normal.Y < 0.7 then
+		return nil
+	end
+	local altura = hitSuelo.Position.Y - pies
+	if altura < C.ESCALAR_ALTURA_MIN or altura > C.ESCALAR_ALTURA_MAX then
+		return nil
+	end
+	-- 3) que quepa el cuerpo encima
+	local alturaCuerpo = humanoid.HipHeight + root.Size.Y
+	local destinoPies = hitSuelo.Position + dentro * 0.8
+	if workspace:Raycast(destinoPies + Vector3.new(0, 0.2, 0), Vector3.new(0, alturaCuerpo + 0.5, 0), rayParams) then
+		return nil
+	end
+	return destinoPies + Vector3.new(0, humanoid.HipHeight + root.Size.Y / 2 + 0.05, 0), dentro, altura
+end
+
+------------------------------------------------------------------------
+-- Barras
+------------------------------------------------------------------------
+
+local function buscarBarra()
+	local manos = root.Position + Vector3.new(0, 2.6, 0)
+	local mejor, mejorDist = nil, C.BARRA_AGARRE
+	for _, b in CollectionService:GetTagged("Barra") do
+		if b:IsA("BasePart") and b:IsDescendantOf(workspace) then
+			local eje = b.CFrame.RightVector -- las barras son cilindros: su eje es X
+			if math.abs(eje.Y) < 0.3 then
+				local largo = b.Size.X / 2
+				local rel = manos - b.Position
+				local t = math.clamp(rel:Dot(eje), -largo + 0.5, largo - 0.5)
+				local punto = b.Position + eje * t
+				local d = (manos - punto).Magnitude
+				if d < mejorDist then
+					mejor, mejorDist = { punto = punto, eje = flat(eje).Unit }, d
+				end
+			end
+		end
+	end
+	return mejor
+end
+
+local function agarrarBarra(b, vel, now)
+	-- "frente" = dirección horizontal perpendicular a la barra hacia donde ibas
+	local frente = UP:Cross(b.eje)
+	local ref = flat(vel).Magnitude > 2 and flat(vel) or flat(camera.CFrame.LookVector)
+	if frente:Dot(ref) < 0 then
+		frente = -frente
+	end
+	local o = root.Position - b.punto
+	local theta = math.atan2(o:Dot(frente), -o.Y)
+	local tangente = frente * math.cos(theta) + UP * math.sin(theta)
+	local omega = vel:Dot(tangente) / C.BARRA_RADIO
+	s.barra = { punto = b.punto, eje = b.eje, frente = frente, theta = theta, omega = omega }
+	s.modo = "barra"
+	s.wallrun = nil
+	s.sliding = false
+	linVel.Enabled = false
+	humanoid.PlatformStand = true
+end
+
+local function soltarBarra(conImpulso, now)
+	local b = s.barra
+	s.barra = nil
+	s.modo = "normal"
+	s.barraSoltadaAt = now
+	linVel.Enabled = true
+	humanoid.PlatformStand = false
+	humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+	local tangente = b.frente * math.cos(b.theta) + UP * math.sin(b.theta)
+	local v = tangente * (b.omega * C.BARRA_RADIO)
+	if conImpulso then
+		v = v * C.BARRA_IMPULSO + UP * C.BARRA_SALTO_EXTRA
+		sumarCombo(now)
+		s.fovPunch = C.FOV_GOLPE
+	end
+	local h = flat(v)
+	if h.Magnitude > C.MAX_SPEED then
+		h = h.Unit * C.MAX_SPEED
+	end
+	root.AssemblyLinearVelocity = Vector3.new(h.X, v.Y, h.Z)
+	linVel.VectorVelocity = h
+	s.lastJumpAt = now
+	s.ultimaPared = nil
+end
+
+local function pasoBarra(dt, now)
+	local b = s.barra
+	-- péndulo
+	local alpha = -(C.GRAVITY / C.BARRA_RADIO) * math.sin(b.theta)
+	-- bombear: W en el sentido del balanceo cuando vas por abajo
+	local wish = wishDirection()
+	local empuje = wish:Dot(b.frente)
+	if math.abs(empuje) > 0.3 and math.abs(b.theta) < 1.2 then
+		local sentido = b.omega >= 0 and 1 or -1
+		if math.abs(b.omega) < 0.3 then
+			sentido = empuje > 0 and 1 or -1
+		end
+		alpha += sentido * C.BARRA_BOMBEO * math.abs(empuje)
+	end
+	b.omega += alpha * dt
+	b.omega *= (1 - C.BARRA_AMORTIGUA * dt)
+	b.theta += b.omega * dt
+	-- tope: no pasar por encima de la barra
+	if math.abs(b.theta) > 2.4 then
+		b.theta = math.sign(b.theta) * 2.4
+		b.omega = -b.omega * 0.3
+	end
+
+	local pos = b.punto + (b.frente * math.sin(b.theta) - UP * math.cos(b.theta)) * C.BARRA_RADIO
+	local mirar = flat(camera.CFrame.LookVector)
+	local giro = mirar.Magnitude > 0.01 and CFrame.lookAt(Vector3.zero, mirar) or CFrame.identity
+	root.CFrame = CFrame.new(pos) * giro
+	local tangente = b.frente * math.cos(b.theta) + UP * math.sin(b.theta)
+	root.AssemblyLinearVelocity = tangente * (b.omega * C.BARRA_RADIO)
+	s.speed = math.abs(b.omega * C.BARRA_RADIO)
+
+	-- saltar = salir lanzado; slide = soltarse
+	if now - s.jumpBufferedAt <= C.JUMP_BUFFER then
+		s.jumpBufferedAt = -math.huge
+		soltarBarra(true, now)
+	elseif s.slideHeld then
+		soltarBarra(false, now)
+	end
+end
+
+------------------------------------------------------------------------
+-- Paso de física
+------------------------------------------------------------------------
+
+local function publicar(grounded)
+	player:SetAttribute("MovVelocidad", s.speed)
+	player:SetAttribute("MovSlide", s.sliding)
+	player:SetAttribute("MovSuelo", grounded)
+	player:SetAttribute("MovUltimoSalto", s.lastJumpAt)
+	player:SetAttribute("MovPared", s.wallrunLado)
+	player:SetAttribute("MovModo", s.modo) -- "normal" | "escalar" | "barra"
+	player:SetAttribute("MovBarra", s.barra and s.barra.punto or nil)
+	player:SetAttribute("MovRodando", os.clock() < s.rodandoHasta)
+	player:SetAttribute("MovCombo", s.combo)
 end
 
 local function step(dt)
@@ -153,69 +342,87 @@ local function step(dt)
 	dt = math.min(dt, 1 / 20)
 	local now = os.clock()
 
+	-- el combo caduca si llevas un rato corriendo normal por el suelo
+	if s.combo > 0 and s.wasGrounded and not s.sliding and now - s.comboUltimoAt > C.COMBO_CADUCA then
+		s.combo = 0
+	end
+
+	-- Columpiándose en una barra
+	if s.modo == "barra" then
+		pasoBarra(dt, now)
+		s.wallrunLado = 0
+		publicar(false)
+		return
+	end
+
+	-- Subiendo un borde
+	if s.modo == "escalar" then
+		local e = s.escalar
+		local t = math.clamp((now - e.inicio) / e.duracion, 0, 1)
+		-- primero sube, luego avanza
+		local subida = math.min(t / 0.65, 1)
+		local avance = math.clamp((t - 0.35) / 0.65, 0, 1)
+		subida = 1 - (1 - subida) ^ 2
+		local pos = Vector3.new(
+			e.desde.X + (e.hasta.X - e.desde.X) * avance,
+			e.desde.Y + (e.hasta.Y - e.desde.Y) * subida,
+			e.desde.Z + (e.hasta.Z - e.desde.Z) * avance
+		)
+		root.CFrame = CFrame.new(pos) * (root.CFrame - root.CFrame.Position)
+		root.AssemblyLinearVelocity = Vector3.zero
+		linVel.VectorVelocity = Vector3.zero
+		if t >= 1 then
+			s.modo = "normal"
+			s.escalar = nil
+			humanoid.PlatformStand = false
+			linVel.Enabled = true
+			linVel.VectorVelocity = e.salida
+			root.AssemblyLinearVelocity = e.salida
+			s.lastGroundedAt = now
+		end
+		s.speed = e.salida.Magnitude
+		publicar(true)
+		return
+	end
+
 	local vel = root.AssemblyLinearVelocity
 	local horiz = flat(vel)
 	local vy = vel.Y
 	local setY = false
+	local wish = wishDirection()
 
 	-- Suelo
 	local hit = groundHit()
 	local grounded = hit ~= nil and (now - s.lastJumpAt) > 0.1 and vy <= 2
 	if grounded then
 		if not s.wasGrounded then
-			s.landDip = math.clamp(-s.lastAirVelY / 120, 0, 1) * C.LAND_DIP_MAX
+			-- aterrizaje
+			local caida = -s.lastAirVelY
+			s.landDip = math.clamp(caida / 120, 0, 1) * C.LAND_DIP_MAX
+			if caida >= C.CAIDA_FUERTE then
+				if now - s.slidePressedAt <= C.RODAR_VENTANA or s.slideHeld then
+					-- rodar: conservas la velocidad y ganas un poco
+					local dir = unitOr(horiz, unitOr(flat(camera.CFrame.LookVector), Vector3.zAxis))
+					horiz = dir * math.min(math.max(horiz.Magnitude, C.WALK_SPEED) + C.RODAR_BONUS, C.MAX_SPEED)
+					s.rodarInicio = now
+					s.rodandoHasta = now + C.RODAR_DURACION
+					s.landDip = 0.3
+					sumarCombo(now)
+				else
+					-- golpe: te frena y te aturde un momento
+					horiz *= C.GOLPE_FRENO
+					s.aturdidoHasta = now + C.GOLPE_ATURDIDO
+					s.combo = 0
+				end
+			end
 		end
 		s.lastGroundedAt = now
-		s.airJumpsLeft = C.AIR_JUMPS
 		s.wallrun = nil
 		s.ultimaPared = nil
 	else
 		s.lastAirVelY = vy
 	end
 	s.wasGrounded = grounded
-
-	local wish = wishDirection()
-
-	-- Recarga de dashes
-	if s.dashCharges < C.DASH_CHARGES then
-		s.dashCharges = math.min(C.DASH_CHARGES, s.dashCharges + dt / C.DASH_RECHARGE)
-	end
-
-	-- Salto (con coyote time, buffer y doble salto)
-	if now - s.jumpBufferedAt <= C.JUMP_BUFFER then
-		local jumped = false
-		if s.wallrun then
-			-- salto de pared: hacia fuera y arriba, recupera el doble salto
-			local n = s.wallrun.normal
-			horiz = flat(horiz - n * horiz:Dot(n)) + n * C.WALLRUN_SALTO_FUERA
-			vy = C.WALLRUN_SALTO_ARRIBA
-			s.ultimaPared = n
-			s.wallrun = nil
-			s.wallrunBloqueadoHasta = now + 0.25
-			s.airJumpsLeft = C.AIR_JUMPS
-			jumped = true
-		elseif grounded or now - s.lastGroundedAt <= C.COYOTE_TIME then
-			vy = C.JUMP_VELOCITY
-			jumped = true
-		elseif s.airJumpsLeft > 0 then
-			s.airJumpsLeft -= 1
-			vy = C.AIR_JUMP_VELOCITY
-			-- el doble salto te deja cambiar de dirección sin perder velocidad
-			if wish.Magnitude > 0 then
-				horiz = wish * math.max(horiz.Magnitude, C.WALK_SPEED)
-			end
-			jumped = true
-		end
-		if jumped then
-			setY = true
-			s.jumpBufferedAt = -math.huge
-			s.lastJumpAt = now
-			s.lastGroundedAt = -math.huge
-			grounded = false -- saltar en el mismo frame que aterrizas = sin rozamiento (bunny-hop)
-			s.sliding = false
-			humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
-		end
-	end
 
 	-- Empujón recibido (manotazo de otro jugador)
 	if s.empujePendiente then
@@ -224,73 +431,125 @@ local function step(dt)
 		horiz = flat(e)
 		vy = e.Y
 		setY = true
-		s.dashing = false
 		s.sliding = false
+		s.wallrun = nil
 		s.lastJumpAt = now
 		s.lastGroundedAt = -math.huge
 		grounded = false
 		s.empujeHasta = now + C.EMPUJE_SIN_LIMITE
-		s.fovPunch = C.FOV_DASH_PUNCH
+		s.fovPunch = C.FOV_GOLPE
 		humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
 	end
 
-	-- Dash
-	if s.dashQueued then
-		s.dashQueued = false
-		if s.dashCharges >= 1 and now - s.dashEndsAt >= C.DASH_COOLDOWN and not s.dashing then
-			s.dashCharges -= 1
-			local look = flat(camera.CFrame.LookVector)
-			s.dashDir = wish.Magnitude > 0 and wish or (look.Magnitude > 0.01 and look.Unit or Vector3.zAxis)
-			s.dashExitSpeed = math.max(C.DASH_EXIT_SPEED, horiz.Magnitude)
-			s.dashEndsAt = now + C.DASH_DURATION
-			s.dashing = true
+	-- Saltos: desde el suelo, o desde un muro estando en el aire
+	if now - s.jumpBufferedAt <= C.JUMP_BUFFER and now > s.aturdidoHasta then
+		local jumped = false
+		if grounded or now - s.lastGroundedAt <= C.COYOTE_TIME then
+			vy = C.JUMP_VELOCITY
+			jumped = true
+		else
+			local n = s.wallrun and s.wallrun.normal or muroCercano()
+			if n and not (s.ultimaPared and s.ultimaPared:Dot(n) > 0.7) then
+				-- salto de pared: fuera y arriba, ganando velocidad
+				local rapidez = math.min(math.max(horiz.Magnitude, C.WALK_SPEED) + C.MURO_SALTO_BONUS, C.MAX_SPEED)
+				local paralelo = flat(horiz - n * horiz:Dot(n))
+				local dir = unitOr(paralelo + n * C.MURO_SALTO_FUERA, n)
+				-- si empujas hacia algún sitio, el salto se tuerce un poco hacia ahí
+				if wish.Magnitude > 0 and wish:Dot(n) > -0.2 then
+					dir = unitOr(dir:Lerp(wish, 0.35), dir)
+				end
+				horiz = flat(dir).Unit * rapidez
+				vy = C.MURO_SALTO_ARRIBA
+				s.ultimaPared = n
+				s.wallrun = nil
+				sumarCombo(now)
+				s.fovPunch = C.FOV_GOLPE * 0.6
+				jumped = true
+			end
+		end
+		if jumped then
+			setY = true
+			s.jumpBufferedAt = -math.huge
+			s.lastJumpAt = now
+			s.lastGroundedAt = -math.huge
 			s.sliding = false
-			s.fovPunch = C.FOV_DASH_PUNCH
+			grounded = false
+			humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
 		end
 	end
 
-	if s.dashing then
-		if now < s.dashEndsAt then
-			horiz = s.dashDir * C.DASH_SPEED
-			vy = 0
-			setY = true
-		else
-			s.dashing = false
-			horiz = s.dashDir * s.dashExitSpeed
-		end
-	elseif grounded then
-		-- Slide: al pulsar con velocidad suficiente
-		if s.slideHeld and not s.sliding and horiz.Magnitude >= C.SLIDE_MIN_START then
-			s.sliding = true
-			if now - s.lastSlideBoostAt >= C.SLIDE_BOOST_COOLDOWN then
-				s.lastSlideBoostAt = now
-				horiz += horiz.Unit * C.SLIDE_BOOST
+	-- ¿Escalar un borde? (empujando hacia delante, en el aire o corriendo contra él)
+	if wish.Magnitude > 0 and not s.sliding and now > s.aturdidoHasta then
+		local adelante = unitOr(flat(camera.CFrame.LookVector), wish)
+		if wish:Dot(adelante) > 0.5 and (not grounded or horiz.Magnitude > 4) then
+			local destino, dentro, altura = buscarBorde(adelante)
+			if destino and (not grounded or altura > 3) then
+				local salida = dentro * math.max(horiz.Magnitude * C.ESCALAR_CONSERVA, C.WALK_SPEED * 0.6)
+				s.escalar = {
+					desde = root.Position,
+					hasta = destino,
+					inicio = now,
+					duracion = C.ESCALAR_DURACION * math.clamp(altura / 6, 0.6, 1.2),
+					salida = salida,
+				}
+				s.modo = "escalar"
+				s.wallrun = nil
+				humanoid.PlatformStand = true
+				linVel.Enabled = false
+				sumarCombo(now)
+				publicar(true)
+				return
 			end
 		end
+	end
 
+	-- ¿Agarrar una barra?
+	if not grounded and now - s.barraSoltadaAt > C.BARRA_ESPERA then
+		local b = buscarBarra()
+		if b then
+			agarrarBarra(b, Vector3.new(horiz.X, vy, horiz.Z), now)
+			publicar(false)
+			return
+		end
+	end
+
+	if grounded then
+		-- Slide
+		if s.slideHeld and not s.sliding and horiz.Magnitude >= C.SLIDE_MIN_START then
+			s.sliding = true
+		end
 		if s.sliding and (not s.slideHeld or horiz.Magnitude < C.SLIDE_MIN_SPEED) then
 			s.sliding = false
 		end
 
 		if s.sliding then
 			horiz = applyFriction(horiz, C.SLIDE_FRICTION, dt)
-			-- en cuesta abajo el slide acelera
+			-- cuesta abajo acelera
 			local n = hit.Normal
 			local g = Vector3.new(0, -C.GRAVITY, 0)
-			horiz += flat(g - n * g:Dot(n)) * dt
+			local cuesta = flat(g - n * g:Dot(n))
+			horiz += cuesta * C.SLIDE_CUESTA * dt
 			horiz = steer(horiz, wish, C.SLIDE_STEER, dt)
+			if cuesta.Magnitude > 5 then
+				s.comboUltimoAt = now -- deslizar cuesta abajo mantiene el combo
+			end
+		elseif now < s.aturdidoHasta then
+			horiz = applyFriction(horiz, C.GROUND_FRICTION, dt)
+		elseif horiz.Magnitude > C.WALK_SPEED + 0.5 and wish.Magnitude > 0 then
+			-- con inercia: se pierde poco a poco y se gira con peso
+			local rapidez = math.max(horiz.Magnitude - C.INERCIA_PERDIDA * dt, C.WALK_SPEED)
+			horiz = steer(horiz, wish, C.INERCIA_GIRO, dt)
+			horiz = unitOr(horiz, wish) * rapidez
 		else
 			horiz = applyFriction(horiz, C.GROUND_FRICTION, dt)
 			horiz = accelerate(horiz, wish, C.WALK_SPEED, C.GROUND_ACCEL, dt)
 		end
 	else
-		-- ¿Empezar a correr por la pared? (en el aire, rápido y empujando hacia delante)
-		if not s.wallrun and now > s.wallrunBloqueadoHasta and horiz.Magnitude >= C.WALLRUN_VEL_MIN
-			and wish.Magnitude > 0 and wish:Dot(horiz.Unit) > 0.3 then
-			local n, lado = buscarPared(horiz.Unit)
+		-- ¿Correr por la pared?
+		if not s.wallrun and horiz.Magnitude >= C.WALLRUN_VEL_MIN and wish.Magnitude > 0 and wish:Dot(horiz.Unit) > 0.3 then
+			local n, lado = paredLateral(horiz.Unit)
 			if n and not (s.ultimaPared and s.ultimaPared:Dot(n) > 0.7) then
 				s.wallrun = { normal = n, lado = lado, hasta = now + C.WALLRUN_DURACION }
-				s.airJumpsLeft = C.AIR_JUMPS
 				vy = math.max(vy, C.WALLRUN_SUBIDA_INICIAL)
 				setY = true
 			end
@@ -298,18 +557,17 @@ local function step(dt)
 
 		if s.wallrun then
 			local w = s.wallrun
-			local adelante = horiz.Magnitude > 0.1 and horiz.Unit or flat(camera.CFrame.LookVector).Unit
-			local n, lado = buscarPared(adelante)
+			local adelante = unitOr(horiz, unitOr(flat(camera.CFrame.LookVector), Vector3.zAxis))
+			local n, lado = paredLateral(adelante)
 			local sigue = n and n:Dot(w.normal) > 0.8 and now < w.hasta
 				and wish.Magnitude > 0 and horiz.Magnitude >= C.WALLRUN_VEL_MIN * 0.6
 			if sigue then
 				w.normal, w.lado = n, lado
-				local tangente = flat(adelante - n * adelante:Dot(n))
-				tangente = tangente.Magnitude > 0.01 and tangente.Unit or adelante
-				local rapidez = math.max(horiz.Magnitude, C.WALLRUN_VEL_MIN)
-				horiz = tangente * rapidez - n * 2 -- un poco hacia la pared para no despegarse
+				local tangente = unitOr(flat(adelante - n * adelante:Dot(n)), adelante)
+				horiz = tangente * horiz.Magnitude - n * 2 -- un poco hacia la pared para no despegarse
 				vy = math.max(vy - C.WALLRUN_GRAVEDAD * dt, -C.WALLRUN_CAIDA_MAX)
 				setY = true
+				s.comboUltimoAt = now
 			else
 				s.ultimaPared = w.normal
 				s.wallrun = nil
@@ -320,9 +578,6 @@ local function step(dt)
 			horiz = accelerate(horiz, wish, C.AIR_WISH_CAP, C.AIR_ACCEL, dt)
 			horiz = steer(horiz, wish, C.AIR_STEER, dt)
 		end
-	end
-	if s.dashing or grounded then
-		s.wallrun = nil
 	end
 	s.wallrunLado = s.wallrun and s.wallrun.lado or 0
 
@@ -335,26 +590,20 @@ local function step(dt)
 		root.AssemblyLinearVelocity = Vector3.new(horiz.X, vy, horiz.Z)
 	end
 	s.speed = horiz.Magnitude
-
-	-- Estado público para otros scripts (brazos en primera persona)
-	player:SetAttribute("MovVelocidad", s.speed)
-	player:SetAttribute("MovSlide", s.sliding)
-	player:SetAttribute("MovDash", s.dashing)
-	player:SetAttribute("MovSuelo", grounded)
-	player:SetAttribute("MovUltimoSalto", s.lastJumpAt)
-	player:SetAttribute("MovPared", s.wallrunLado)
+	publicar(grounded)
 end
 
 ------------------------------------------------------------------------
--- Cámara: FOV por velocidad, inclinación lateral, bajada al deslizar y al aterrizar
+-- Cámara: FOV por velocidad, inclinaciones, bajada al deslizar, voltereta al rodar
 ------------------------------------------------------------------------
 
 local function cameraStep(dt)
 	if not humanoid then
 		return
 	end
+	local now = os.clock()
 	local speedT = math.clamp((s.speed - C.WALK_SPEED) / (C.FOV_SPEED_FOR_MAX - C.WALK_SPEED), 0, 1)
-	s.fovPunch = s.fovPunch + (0 - s.fovPunch) * math.min(dt * 6, 1)
+	s.fovPunch += (0 - s.fovPunch) * math.min(dt * 6, 1)
 	local targetFov = C.FOV_BASE + speedT * C.FOV_MAX_EXTRA + s.fovPunch
 	camera.FieldOfView += (targetFov - camera.FieldOfView) * math.min(dt * 8, 1)
 
@@ -362,19 +611,31 @@ local function cameraStep(dt)
 	if s.sliding then
 		targetRoll += 2
 	end
-	-- corriendo por la pared la cámara se inclina hacia fuera
 	targetRoll += s.wallrunLado * C.WALLRUN_INCLINACION
 	s.roll += (targetRoll - s.roll) * math.min(dt * 10, 1)
 	camera.CFrame *= CFrame.Angles(0, 0, math.rad(s.roll))
 
+	-- voltereta al rodar
+	if now < s.rodandoHasta then
+		local t = (now - s.rodarInicio) / C.RODAR_DURACION
+		local e = t < 0.5 and 2 * t * t or 1 - (-2 * t + 2) ^ 2 / 2
+		camera.CFrame *= CFrame.Angles(-e * math.pi * 2, 0, 0)
+	end
+
+	-- escalando: la cámara se inclina hacia el borde
+	if s.modo == "escalar" and s.escalar then
+		local t = math.clamp((now - s.escalar.inicio) / s.escalar.duracion, 0, 1)
+		camera.CFrame *= CFrame.Angles(-math.sin(t * math.pi) * math.rad(10), 0, 0)
+	end
+
 	s.landDip += (0 - s.landDip) * math.min(dt * 10, 1)
-	local drop = (s.sliding and C.SLIDE_CAMERA_DROP or 0) + s.landDip
+	local drop = (s.sliding and C.SLIDE_CAMERA_DROP or 0) + s.landDip + (now < s.rodandoHasta and 1.5 or 0)
 	local current = humanoid.CameraOffset.Y
 	humanoid.CameraOffset = Vector3.new(0, current + (-drop - current) * math.min(dt * 14, 1), 0)
 end
 
 ------------------------------------------------------------------------
--- HUD de pruebas: velocidad y cargas de dash
+-- HUD de pruebas: velocidad y combo
 ------------------------------------------------------------------------
 
 local hud = Instance.new("ScreenGui")
@@ -385,14 +646,20 @@ hud.Parent = player:WaitForChild("PlayerGui")
 
 local speedLabel = Instance.new("TextLabel")
 speedLabel.AnchorPoint = Vector2.new(0.5, 1)
-speedLabel.Position = UDim2.new(0.5, 0, 1, -40)
+speedLabel.Position = UDim2.new(0.5, 0, 1, -24)
 speedLabel.Size = UDim2.fromOffset(200, 30)
 speedLabel.BackgroundTransparency = 1
 speedLabel.Font = Enum.Font.GothamBold
-speedLabel.TextSize = 24
+speedLabel.TextSize = 22
 speedLabel.TextColor3 = Color3.new(1, 1, 1)
-speedLabel.TextStrokeTransparency = 0.5
+speedLabel.TextStrokeTransparency = 0.6
 speedLabel.Parent = hud
+
+local comboLabel = speedLabel:Clone()
+comboLabel.Position = UDim2.new(0.5, 0, 1, -52)
+comboLabel.TextSize = 18
+comboLabel.TextColor3 = Color3.fromRGB(255, 214, 236)
+comboLabel.Parent = hud
 
 local crosshair = Instance.new("Frame")
 crosshair.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -401,29 +668,11 @@ crosshair.Size = UDim2.fromOffset(4, 4)
 crosshair.BackgroundColor3 = Color3.new(1, 1, 1)
 crosshair.BorderSizePixel = 0
 crosshair.Parent = hud
-
-local bars = {}
-for i = 1, C.DASH_CHARGES do
-	local back = Instance.new("Frame")
-	back.AnchorPoint = Vector2.new(0.5, 1)
-	back.Position = UDim2.new(0.5, (i - (C.DASH_CHARGES + 1) / 2) * 48, 1, -20)
-	back.Size = UDim2.fromOffset(40, 8)
-	back.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-	back.BorderSizePixel = 0
-	back.Parent = hud
-	local fill = Instance.new("Frame")
-	fill.Size = UDim2.fromScale(0, 1)
-	fill.BackgroundColor3 = Color3.fromRGB(90, 200, 255)
-	fill.BorderSizePixel = 0
-	fill.Parent = back
-	bars[i] = fill
-end
+Instance.new("UICorner", crosshair).CornerRadius = UDim.new(1, 0)
 
 local function hudStep()
 	speedLabel.Text = string.format("%d", math.floor(s.speed + 0.5))
-	for i, fill in bars do
-		fill.Size = UDim2.fromScale(math.clamp(s.dashCharges - (i - 1), 0, 1), 1)
-	end
+	comboLabel.Text = s.combo >= 2 and ("COMBO x" .. s.combo) or ""
 end
 
 ------------------------------------------------------------------------
@@ -440,18 +689,15 @@ UserInputService.JumpRequest:Connect(function()
 	s.lastJumpRequest = now
 end)
 
-ContextActionService:BindActionAtPriority("Dash", function(_, state)
+ContextActionService:BindActionAtPriority("Slide", function(_, state)
 	if state == Enum.UserInputState.Begin then
-		s.dashQueued = true
+		s.slideHeld = true
+		s.slidePressedAt = os.clock()
+	elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+		s.slideHeld = false
 	end
 	return Enum.ContextActionResult.Sink
-end, true, PRIORIDAD, Enum.KeyCode.LeftShift, Enum.KeyCode.Q, Enum.KeyCode.ButtonL1, Enum.KeyCode.ButtonX)
-ContextActionService:SetTitle("Dash", "Dash")
-
-ContextActionService:BindActionAtPriority("Slide", function(_, state)
-	s.slideHeld = state == Enum.UserInputState.Begin
-	return Enum.ContextActionResult.Sink
-end, true, PRIORIDAD, Enum.KeyCode.LeftControl, Enum.KeyCode.C, Enum.KeyCode.ButtonB)
+end, true, PRIORIDAD, Enum.KeyCode.LeftControl, Enum.KeyCode.C, Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonB)
 ContextActionService:SetTitle("Slide", "Slide")
 ContextActionService:SetPosition("Slide", UDim2.new(1, -170, 1, -80))
 
@@ -462,10 +708,15 @@ ContextActionService:SetPosition("Slide", UDim2.new(1, -170, 1, -80))
 local function onCharacter(char)
 	humanoid = char:WaitForChild("Humanoid")
 	root = char:WaitForChild("HumanoidRootPart")
-	rayParams.FilterDescendantsInstances = { char }
+	local filtro = { char }
+	local brazos = camera:FindFirstChild("BrazosVista")
+	if brazos then
+		table.insert(filtro, brazos)
+	end
+	rayParams.FilterDescendantsInstances = filtro
 	resetState()
 
-	-- El salto lo hacemos nosotros (doble salto, coyote, buffer)
+	-- El salto lo hacemos nosotros; nada de escalar "a lo Roblox"
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
 
@@ -498,9 +749,22 @@ end
 
 -- El servidor avisa cuando te dan un manotazo
 ReplicatedStorage:WaitForChild("Remotos"):WaitForChild("Empujon").OnClientEvent:Connect(function(vector)
-	if typeof(vector) == "Vector3" then
-		s.empujePendiente = vector
+	if typeof(vector) ~= "Vector3" then
+		return
 	end
+	if s.modo == "barra" and s.barra then
+		soltarBarra(false, os.clock())
+	elseif s.modo == "escalar" then
+		s.modo = "normal"
+		s.escalar = nil
+		if humanoid then
+			humanoid.PlatformStand = false
+		end
+		if linVel then
+			linVel.Enabled = true
+		end
+	end
+	s.empujePendiente = vector
 end)
 
 RunService.PreSimulation:Connect(step)

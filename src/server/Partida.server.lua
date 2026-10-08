@@ -267,6 +267,9 @@ Bots.empezar({
 
 local function ajustarBots()
 	local reales = #Players:GetPlayers()
+	if C.SOLO_MOVIMIENTO then
+		reales = C.PARTICIPANTES_OBJETIVO
+	end
 	Bots.ajustar(math.max(0, C.PARTICIPANTES_OBJETIVO - reales), mapaActual.apariciones[1])
 end
 
@@ -345,6 +348,12 @@ end
 
 ReplicatedStorage:SetAttribute("Modo", C.MODO_INICIAL)
 ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
+
+if C.SOLO_MOVIMIENTO then
+	-- modo de pruebas: nada de rondas
+	fijarFase("Esperando", 0, "")
+	return
+end
 
 while true do
 	-- 1. Esperar a que haya gente (con los bots casi siempre la hay)
