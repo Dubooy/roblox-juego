@@ -153,6 +153,7 @@ return {
 	VENTAJA_HUIDA = 4,
 	DURACION_RONDA = 120,
 	PAUSA_FINAL = 6,
+	MODO_LIBRE_DURACION = 90, -- sin rivales: segundos en cada mapa antes de pasar al siguiente
 
 	-- Bots
 	PARTICIPANTES_OBJETIVO = 6, -- se rellenan con bots hasta este número

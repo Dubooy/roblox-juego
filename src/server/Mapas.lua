@@ -579,10 +579,19 @@ function Mapas.construir()
 	ambiente()
 	-- la pista de pruebas queda en el centro (es donde apareces entre rondas)
 	local prueba = pista(raiz)
-	local lista = {
-		parque(raiz, Vector3.new(0, 0, 450)),
-		obras(raiz, Vector3.new(450, 0, 450)),
-	}
+	-- cada mapa se construye por separado: si uno falla, el otro sigue funcionando
+	local lista = {}
+	for _, def in { { parque, Vector3.new(0, 0, 450) }, { obras, Vector3.new(450, 0, 450) } } do
+		local ok, mapa = pcall(def[1], raiz, def[2])
+		if ok then
+			table.insert(lista, mapa)
+		else
+			warn("[Mapas] No se pudo construir un mapa:", mapa)
+		end
+	end
+	if #lista == 0 then
+		table.insert(lista, prueba)
+	end
 	if SOLO_MOVIMIENTO then
 		table.insert(lista, 1, prueba)
 	end

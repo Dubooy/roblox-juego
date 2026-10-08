@@ -356,15 +356,28 @@ if C.SOLO_MOVIMIENTO then
 end
 
 while true do
-	-- 1. Esperar a que haya gente (con los bots casi siempre la hay)
-	while #participantes() < C.JUGADORES_MINIMOS do
-		fijarFase("Esperando", 0, "Esperando jugadores...")
-		task.wait(1)
-	end
-
-	-- 2. Siguiente mapa y cuenta atrás
+	-- 1. Siguiente mapa
 	indiceMapa = indiceMapa % #mapas + 1
 	mapaActual = mapas[indiceMapa]
+	ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
+
+	-- Si no hay con quién jugar (por ejemplo, si los bots no se han podido crear),
+	-- MODO LIBRE: te lleva al mapa para que lo recorras, y cambia de mapa cada rato.
+	if #participantes() < C.JUGADORES_MINIMOS then
+		for _, p in participantes() do
+			colocar(p, aparicionAleatoria())
+		end
+		local hasta = os.clock() + C.MODO_LIBRE_DURACION
+		while #participantes() < C.JUGADORES_MINIMOS and os.clock() < hasta do
+			fijarFase("Esperando", math.ceil(hasta - os.clock()), "Modo libre · " .. mapaActual.nombre)
+			task.wait(1)
+		end
+		if #participantes() < C.JUGADORES_MINIMOS then
+			continue -- siguiente mapa
+		end
+	end
+
+	-- 2. Cuenta atrás
 	ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
 	modoActual = Modos[C.MODO_INICIAL] or Modos.Contagio
 	ReplicatedStorage:SetAttribute("Modo", modoActual.nombre)

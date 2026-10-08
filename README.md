@@ -40,7 +40,7 @@ Los pilladores se ven en rojo y los que huyen en azul, incluso a través de las 
 El modo "Corona robada" llegará con el lobby, donde se elegirá el modo.
 
 ## Probar
-Abre `MovimientoFPS.rbxlx` en Studio y pulsa **Play**. Hay bots que rellenan la partida hasta 6
+Abre `PillaParkour.rbxlx` en Studio y pulsa **Play**. Hay bots que rellenan la partida hasta 6
 participantes, así que se puede jugar solo. Los mapas se alternan cada ronda:
 **Parque de calistenia** y **Torre de obras**. Si cambias algo en `src/`, regenera el archivo con
 `python3 herramientas/crear_rbxlx.py`.

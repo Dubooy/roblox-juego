@@ -41,9 +41,30 @@ local function crearModelo(i)
 	local ok, modelo = pcall(function()
 		return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
 	end)
-	if not ok then
-		warn("No se pudo crear un bot:", modelo)
-		return nil
+	if not ok or not modelo then
+		-- plan B: copiar el personaje de un jugador y pintarlo
+		warn("[Bots] Roblox no generó el bot, se copia un personaje:", modelo)
+		modelo = nil
+		for _, p in Players:GetPlayers() do
+			local char = p.Character
+			if char and char:FindFirstChildOfClass("Humanoid") then
+				local antes = char.Archivable
+				char.Archivable = true
+				modelo = char:Clone()
+				char.Archivable = antes
+				break
+			end
+		end
+		if not modelo then
+			return nil
+		end
+		for _, d in modelo:GetDescendants() do
+			if d:IsA("LuaSourceContainer") or d:IsA("Highlight") or d:IsA("LinearVelocity") or d:IsA("Accessory") or d:IsA("Clothing") then
+				d:Destroy()
+			elseif d:IsA("BasePart") then
+				d.Color = (d.Name:find("Torso") and ropa) or (d.Name:find("Leg") or d.Name:find("Foot")) and pantalon or piel
+			end
+		end
 	end
 	local nombre = NOMBRES[(i - 1) % #NOMBRES + 1]
 	modelo.Name = nombre

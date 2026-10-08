@@ -18,5 +18,7 @@ x += item('Lighting', 'Lighting', extra='<token name="Technology">3</token>')
 x += item('ReplicatedStorage', 'ReplicatedStorage', item('Folder', 'Shared', todos('shared')))
 x += item('ServerScriptService', 'ServerScriptService', todos('server'))
 x += item('StarterPlayer', 'StarterPlayer', item('StarterPlayerScripts', 'StarterPlayerScripts', todos('client')), '<token name="CameraMode">1</token>')
-open('MovimientoFPS.rbxlx', 'w', encoding='utf-8').write(x + '</roblox>')
-print('MovimientoFPS.rbxlx creado')
+import sys
+nombre = sys.argv[1] if len(sys.argv) > 1 else 'PillaParkour.rbxlx'
+open(nombre, 'w', encoding='utf-8').write(x + '</roblox>')
+print(nombre, 'creado')

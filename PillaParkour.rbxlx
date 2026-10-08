@@ -153,6 +153,7 @@ return {
 	VENTAJA_HUIDA = 4,
 	DURACION_RONDA = 120,
 	PAUSA_FINAL = 6,
+	MODO_LIBRE_DURACION = 90, -- sin rivales: segundos en cada mapa antes de pasar al siguiente
 
 	-- Bots
 	PARTICIPANTES_OBJETIVO = 6, -- se rellenan con bots hasta este número
@@ -202,9 +203,30 @@ local function crearModelo(i)
 	local ok, modelo = pcall(function()
 		return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
 	end)
-	if not ok then
-		warn("No se pudo crear un bot:", modelo)
-		return nil
+	if not ok or not modelo then
+		-- plan B: copiar el personaje de un jugador y pintarlo
+		warn("[Bots] Roblox no generó el bot, se copia un personaje:", modelo)
+		modelo = nil
+		for _, p in Players:GetPlayers() do
+			local char = p.Character
+			if char and char:FindFirstChildOfClass("Humanoid") then
+				local antes = char.Archivable
+				char.Archivable = true
+				modelo = char:Clone()
+				char.Archivable = antes
+				break
+			end
+		end
+		if not modelo then
+			return nil
+		end
+		for _, d in modelo:GetDescendants() do
+			if d:IsA("LuaSourceContainer") or d:IsA("Highlight") or d:IsA("LinearVelocity") or d:IsA("Accessory") or d:IsA("Clothing") then
+				d:Destroy()
+			elseif d:IsA("BasePart") then
+				d.Color = (d.Name:find("Torso") and ropa) or (d.Name:find("Leg") or d.Name:find("Foot")) and pantalon or piel
+			end
+		end
 	end
 	local nombre = NOMBRES[(i - 1) % #NOMBRES + 1]
 	modelo.Name = nombre
@@ -1004,10 +1026,19 @@ function Mapas.construir()
 	ambiente()
 	-- la pista de pruebas queda en el centro (es donde apareces entre rondas)
 	local prueba = pista(raiz)
-	local lista = {
-		parque(raiz, Vector3.new(0, 0, 450)),
-		obras(raiz, Vector3.new(450, 0, 450)),
-	}
+	-- cada mapa se construye por separado: si uno falla, el otro sigue funcionando
+	local lista = {}
+	for _, def in { { parque, Vector3.new(0, 0, 450) }, { obras, Vector3.new(450, 0, 450) } } do
+		local ok, mapa = pcall(def[1], raiz, def[2])
+		if ok then
+			table.insert(lista, mapa)
+		else
+			warn("[Mapas] No se pudo construir un mapa:", mapa)
+		end
+	end
+	if #lista == 0 then
+		table.insert(lista, prueba)
+	end
 	if SOLO_MOVIMIENTO then
 		table.insert(lista, 1, prueba)
 	end
@@ -1385,15 +1416,28 @@ if C.SOLO_MOVIMIENTO then
 end
 
 while true do
-	-- 1. Esperar a que haya gente (con los bots casi siempre la hay)
-	while #participantes() < C.JUGADORES_MINIMOS do
-		fijarFase("Esperando", 0, "Esperando jugadores...")
-		task.wait(1)
-	end
-
-	-- 2. Siguiente mapa y cuenta atrás
+	-- 1. Siguiente mapa
 	indiceMapa = indiceMapa % #mapas + 1
 	mapaActual = mapas[indiceMapa]
+	ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
+
+	-- Si no hay con quién jugar (por ejemplo, si los bots no se han podido crear),
+	-- MODO LIBRE: te lleva al mapa para que lo recorras, y cambia de mapa cada rato.
+	if #participantes() < C.JUGADORES_MINIMOS then
+		for _, p in participantes() do
+			colocar(p, aparicionAleatoria())
+		end
+		local hasta = os.clock() + C.MODO_LIBRE_DURACION
+		while #participantes() < C.JUGADORES_MINIMOS and os.clock() < hasta do
+			fijarFase("Esperando", math.ceil(hasta - os.clock()), "Modo libre · " .. mapaActual.nombre)
+			task.wait(1)
+		end
+		if #participantes() < C.JUGADORES_MINIMOS then
+			continue -- siguiente mapa
+		end
+	end
+
+	-- 2. Cuenta atrás
 	ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
 	modoActual = Modos[C.MODO_INICIAL] or Modos.Contagio
 	ReplicatedStorage:SetAttribute("Modo", modoActual.nombre)
