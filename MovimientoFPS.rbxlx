@@ -1,0 +1,977 @@
+<roblox version="4"><Item class="Workspace" referent="RBX1"><Properties><string name="Name">Workspace</string></Properties></Item><Item class="ReplicatedStorage" referent="RBX4"><Properties><string name="Name">ReplicatedStorage</string></Properties><Item class="Folder" referent="RBX3"><Properties><string name="Name">Shared</string></Properties><Item class="ModuleScript" referent="RBX2"><Properties><string name="Name">Config</string><ProtectedString name="Source"><![CDATA[-- Ajustes del movimiento. Todo lo que define "cómo se siente" está aquí:
+-- cambia números y prueba (Play) sin tocar el resto del código.
+-- Velocidades en studs/segundo, tiempos en segundos.
+
+return {
+	GRAVITY = 196.2,
+
+	-- Suelo
+	WALK_SPEED = 22, -- velocidad objetivo andando
+	GROUND_ACCEL = 12, -- cuánto tarda en llegar a WALK_SPEED (más = más seco)
+	GROUND_FRICTION = 8, -- frenado al soltar las teclas
+	STOP_SPEED = 10, -- por debajo de esto el frenado es constante (para parar del todo)
+
+	-- Aire
+	AIR_ACCEL = 40,
+	AIR_WISH_CAP = 4, -- pequeño = el "strafe" en el aire suma velocidad poco a poco (bunny-hop)
+	AIR_STEER = 2.5, -- giro suave del impulso hacia donde pulsas, sin perder velocidad
+
+	MAX_SPEED = 110, -- tope absoluto en horizontal
+
+	-- Salto
+	JUMP_VELOCITY = 55,
+	AIR_JUMPS = 1, -- saltos extra en el aire (1 = doble salto)
+	AIR_JUMP_VELOCITY = 50,
+	COYOTE_TIME = 0.12, -- puedes saltar un instante después de salir de un borde
+	JUMP_BUFFER = 0.12, -- si pulsas justo antes de tocar suelo, salta al aterrizar
+
+	-- Dash
+	DASH_CHARGES = 3,
+	DASH_RECHARGE = 1.1, -- segundos por carga
+	DASH_SPEED = 95,
+	DASH_DURATION = 0.16,
+	DASH_EXIT_SPEED = 45, -- velocidad mínima con la que sales del dash (conserva impulso)
+	DASH_COOLDOWN = 0.12, -- entre dos dashes seguidos
+
+	-- Deslizamiento (slide)
+	SLIDE_MIN_START = 18, -- velocidad mínima para empezar a deslizar
+	SLIDE_BOOST = 14, -- empujón al empezar
+	SLIDE_BOOST_COOLDOWN = 1.0, -- para que no se pueda encadenar el empujón sin parar
+	SLIDE_FRICTION = 0.6, -- rozamiento deslizando (bajo = deslizas más lejos)
+	SLIDE_MIN_SPEED = 10, -- por debajo, el slide termina
+	SLIDE_STEER = 1.2,
+	SLIDE_CAMERA_DROP = 1.6, -- cuánto baja la cámara
+
+	-- Cámara
+	FOV_BASE = 75,
+	FOV_MAX_EXTRA = 20, -- FOV extra a máxima velocidad
+	FOV_SPEED_FOR_MAX = 80,
+	FOV_DASH_PUNCH = 8,
+	ROLL_MAX = 3, -- grados de inclinación al moverte de lado
+	LAND_DIP_MAX = 1.2, -- golpe de cámara al aterrizar
+
+	-- Servidor (anti-trampas básico)
+	SERVER_SPEED_TOLERANCE = 1.35,
+}
+]]></ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX7"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX5"><Properties><string name="Name">Validacion</string><ProtectedString name="Source"><![CDATA[-- Validación básica en el servidor. El cliente mueve su personaje (así se siente
+-- instantáneo), y el servidor comprueba que no vaya más rápido de lo posible.
+-- De momento solo avisa en la consola; en PvP aquí se devolvería al jugador a su
+-- última posición válida.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+
+workspace.Gravity = C.GRAVITY
+
+local INTERVALO = 0.25
+local AVISOS_PARA_MARCAR = 4
+local limite = math.max(C.MAX_SPEED, C.DASH_SPEED) * C.SERVER_SPEED_TOLERANCE
+
+local registro = {} -- [player] = { pos, avisos }
+
+Players.PlayerAdded:Connect(function(player)
+	player.CameraMode = Enum.CameraMode.LockFirstPerson
+	player.CharacterAdded:Connect(function()
+		registro[player] = nil -- al reaparecer se teletransporta; no contar ese salto
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	registro[player] = nil
+end)
+
+while true do
+	task.wait(INTERVALO)
+	for _, player in Players:GetPlayers() do
+		local char = player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not root then
+			continue
+		end
+		local pos = root.Position
+		local r = registro[player]
+		if r and not root:GetAttribute("Teletransportado") then
+			local d = Vector3.new(pos.X - r.pos.X, 0, pos.Z - r.pos.Z).Magnitude
+			if d / INTERVALO > limite then
+				r.avisos += 1
+				if r.avisos >= AVISOS_PARA_MARCAR then
+					warn(("[Movimiento] %s va demasiado rápido (%.0f studs/s)"):format(player.Name, d / INTERVALO))
+					r.avisos = 0
+				end
+			else
+				r.avisos = math.max(0, r.avisos - 1)
+			end
+			r.pos = pos
+		else
+			root:SetAttribute("Teletransportado", nil)
+			registro[player] = { pos = pos, avisos = 0 }
+		end
+	end
+end
+]]></ProtectedString></Properties></Item><Item class="Script" referent="RBX6"><Properties><string name="Name">PistaPruebas</string><ProtectedString name="Source"><![CDATA[-- Construye un mapa de pruebas al pulsar Play: suelo cuadriculado (para notar la
+-- velocidad), pista con marcas, rampas, parkour sobre lava, bosque de pilares y una
+-- gran bajada para deslizar. Todo se crea en tiempo de ejecución y no se guarda en
+-- el sitio; cuando tengas tu mapa de verdad, borra este script.
+
+local Lighting = game:GetService("Lighting")
+
+local mapa = Instance.new("Folder")
+mapa.Name = "PistaPruebas"
+mapa.Parent = workspace
+
+-- Lo que trae la plantilla de Roblox estorba: se quita solo durante la prueba.
+local baseplate = workspace:FindFirstChild("Baseplate")
+if baseplate then
+	baseplate:Destroy()
+end
+for _, obj in workspace:GetDescendants() do
+	if obj:IsA("SpawnLocation") then
+		obj.Enabled = false
+	end
+end
+
+Lighting.ClockTime = 14
+Lighting.Brightness = 2
+
+local COLORES = {
+	sueloA = Color3.fromRGB(70, 74, 84),
+	sueloB = Color3.fromRGB(58, 61, 70),
+	marca = Color3.fromRGB(90, 200, 255),
+	rampa = Color3.fromRGB(255, 170, 60),
+	plataforma = Color3.fromRGB(230, 230, 235),
+	lava = Color3.fromRGB(255, 60, 40),
+	pilar = Color3.fromRGB(140, 110, 220),
+	bajada = Color3.fromRGB(90, 210, 140),
+}
+
+local function bloque(props, clase)
+	local p = Instance.new(clase or "Part")
+	p.Anchored = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Material = Enum.Material.SmoothPlastic
+	for k, v in props do
+		p[k] = v
+	end
+	p.Parent = props.Parent or mapa
+	return p
+end
+
+local function cartel(texto, posicion)
+	local ancla = bloque({ Size = Vector3.one, Position = posicion, Transparency = 1, CanCollide = false, CanQuery = false })
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromOffset(260, 50)
+	gui.MaxDistance = 220
+	gui.Parent = ancla
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.fromScale(1, 1)
+	t.BackgroundTransparency = 1
+	t.Font = Enum.Font.GothamBold
+	t.TextScaled = true
+	t.TextColor3 = Color3.new(1, 1, 1)
+	t.TextStrokeTransparency = 0.3
+	t.Text = texto
+	t.Parent = gui
+end
+
+------------------------------------------------------------------------
+-- Suelo: baldosas de 40 x 40 alternas, 600 x 600, con la cara de arriba en y = 0
+------------------------------------------------------------------------
+
+local TAM = 40
+local N = 15
+for i = 0, N - 1 do
+	for j = 0, N - 1 do
+		bloque({
+			Name = "Suelo",
+			Size = Vector3.new(TAM, 4, TAM),
+			Position = Vector3.new((i - (N - 1) / 2) * TAM, -2, (j - (N - 1) / 2) * TAM),
+			Color = (i + j) % 2 == 0 and COLORES.sueloA or COLORES.sueloB,
+		})
+	end
+end
+
+-- Muros de borde para no caerse del mapa
+local borde = N * TAM / 2
+for _, d in { Vector3.xAxis, -Vector3.xAxis, Vector3.zAxis, -Vector3.zAxis } do
+	bloque({
+		Name = "Borde",
+		Size = d.X ~= 0 and Vector3.new(4, 40, N * TAM) or Vector3.new(N * TAM, 40, 4),
+		Position = d * (borde + 2) + Vector3.new(0, 20, 0),
+		Transparency = 0.85,
+		Color = COLORES.marca,
+	})
+end
+
+local spawn = bloque({
+	Name = "Salida",
+	Size = Vector3.new(10, 1, 10),
+	Position = Vector3.new(0, 0.5, 0),
+	Color = COLORES.marca,
+	Material = Enum.Material.Neon,
+}, "SpawnLocation")
+spawn.Duration = 0
+cartel("WASD · Espacio: salto/doble salto · Shift/Q: dash · Ctrl/C: slide", Vector3.new(0, 9, 0))
+
+------------------------------------------------------------------------
+-- 1. Pista de velocidad (hacia -Z): marcas cada 20 studs
+------------------------------------------------------------------------
+
+cartel("Pista de velocidad", Vector3.new(0, 8, -50))
+for k = 0, 11 do
+	local z = -60 - k * 20
+	bloque({
+		Name = "Marca",
+		Size = Vector3.new(30, 0.2, 1),
+		Position = Vector3.new(0, 0.1, z),
+		Color = COLORES.marca,
+		Material = Enum.Material.Neon,
+		CanCollide = false,
+	})
+	for _, x in { -18, 18 } do
+		bloque({ Name = "Poste", Size = Vector3.new(2, 10, 2), Position = Vector3.new(x, 5, z), Color = COLORES.pilar })
+	end
+end
+
+------------------------------------------------------------------------
+-- 2. Rampas (corre hacia +Z y sube): 3 inclinaciones para lanzarte
+------------------------------------------------------------------------
+
+cartel("Rampas: sube corriendo o deslizando", Vector3.new(0, 10, 75))
+for idx, alto in { 8, 16, 26 } do
+	local x = (idx - 2) * 30
+	bloque({
+		Name = "Rampa",
+		Size = Vector3.new(20, alto, 40),
+		CFrame = CFrame.new(x, alto / 2, 120),
+		Color = COLORES.rampa,
+	}, "WedgePart")
+end
+
+------------------------------------------------------------------------
+-- 3. Parkour sobre lava (hacia +Z, en x = -150). Si tocas la lava vuelves al inicio.
+------------------------------------------------------------------------
+
+local PX = -150
+local ALTO = 6
+local LARGO = 16
+local huecos = {
+	{ 10, "Salto" },
+	{ 16, "Salto con carrerilla" },
+	{ 22, "Doble salto" },
+	{ 32, "Dash + doble salto" },
+	{ 44, "Slide + salto + dash + doble" },
+}
+
+local zInicio = -40
+bloque({ Name = "Escalon", Size = Vector3.new(16, 3, 6), Position = Vector3.new(PX, 1.5, zInicio - 3), Color = COLORES.plataforma })
+local inicio = bloque({
+	Name = "PlataformaInicio",
+	Size = Vector3.new(16, ALTO, 30),
+	Position = Vector3.new(PX, ALTO / 2, zInicio + 15),
+	Color = COLORES.plataforma,
+})
+cartel("Parkour sobre lava", inicio.Position + Vector3.new(0, 8, 0))
+local checkpoint = inicio.CFrame + Vector3.new(0, ALTO / 2 + 4, 0)
+
+local z = zInicio + 30
+local zLavaInicio = z
+for _, h in huecos do
+	z += h[1]
+	local p = bloque({
+		Name = "Plataforma",
+		Size = Vector3.new(16, ALTO, LARGO),
+		Position = Vector3.new(PX, ALTO / 2, z + LARGO / 2),
+		Color = COLORES.plataforma,
+	})
+	cartel(("%s (%d)"):format(h[2], h[1]), p.Position + Vector3.new(0, 7, -LARGO / 2 - h[1] / 2))
+	z += LARGO
+end
+
+local lava = bloque({
+	Name = "Lava",
+	Size = Vector3.new(40, 1, z - zLavaInicio),
+	Position = Vector3.new(PX, 0.5, (zLavaInicio + z) / 2),
+	Color = COLORES.lava,
+	Material = Enum.Material.Neon,
+})
+lava.Touched:Connect(function(hit)
+	local char = hit.Parent
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root and char:FindFirstChildOfClass("Humanoid") then
+		root:SetAttribute("Teletransportado", true)
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.CFrame = checkpoint
+	end
+end)
+
+------------------------------------------------------------------------
+-- 4. Bosque de pilares para zigzaguear
+------------------------------------------------------------------------
+
+cartel("Bosque de pilares", Vector3.new(200, 10, 40))
+local rng = Random.new(7)
+for _ = 1, 45 do
+	local alto = rng:NextNumber(8, 30)
+	bloque({
+		Name = "Pilar",
+		Size = Vector3.new(4, alto, 4),
+		Position = Vector3.new(rng:NextNumber(140, 270), alto / 2, rng:NextNumber(60, 260)),
+		Color = COLORES.pilar,
+	})
+end
+
+------------------------------------------------------------------------
+-- 5. Torre y gran bajada para deslizar (sube por la escalera del este)
+------------------------------------------------------------------------
+
+local TORRE = 40
+bloque({
+	Name = "Torre",
+	Size = Vector3.new(40, TORRE, 20),
+	Position = Vector3.new(170, TORRE / 2, -110),
+	Color = COLORES.bajada,
+})
+bloque({
+	Name = "Bajada",
+	Size = Vector3.new(40, TORRE, 160),
+	CFrame = CFrame.new(170, TORRE / 2, -200),
+	Color = COLORES.bajada,
+}, "WedgePart")
+for i = 1, 13 do
+	local alto = 3 * i
+	bloque({
+		Name = "Escalon",
+		Size = Vector3.new(8, alto, 20),
+		Position = Vector3.new(190 + (13 - i) * 8 + 4, alto / 2, -110),
+		Color = COLORES.plataforma,
+	})
+end
+cartel("Bajada: mantén slide cuesta abajo", Vector3.new(170, TORRE + 8, -110))
+]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX11"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX10"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX8"><Properties><string name="Name">Movimiento</string><ProtectedString name="Source"><![CDATA[-- Controlador de movimiento en primera persona: dash, slide, doble salto,
+-- coyote time, buffer de salto y bunny-hop. Va en StarterPlayerScripts.
+--
+-- Idea: el Humanoid sigue encargándose de la gravedad, las colisiones y el suelo,
+-- pero la velocidad horizontal la calculamos nosotros y la imponemos con un
+-- LinearVelocity que solo actúa en X y Z. Así el movimiento conserva el impulso.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+local controls = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule")):GetControls()
+
+player.CameraMode = Enum.CameraMode.LockFirstPerson
+UserInputService.MouseIconEnabled = false
+
+local PRIORIDAD = Enum.ContextActionPriority.High.Value
+
+------------------------------------------------------------------------
+-- Estado
+------------------------------------------------------------------------
+
+local humanoid, root, linVel
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local s = {} -- estado del movimiento; se reinicia en cada aparición
+
+local function resetState()
+	s.wasGrounded = false
+	s.lastGroundedAt = -math.huge
+	s.lastJumpAt = -math.huge
+	s.jumpBufferedAt = -math.huge
+	s.lastJumpRequest = -math.huge
+	s.airJumpsLeft = C.AIR_JUMPS
+	s.lastAirVelY = 0
+
+	s.dashCharges = C.DASH_CHARGES
+	s.dashQueued = false
+	s.dashing = false
+	s.dashEndsAt = -math.huge
+	s.dashDir = Vector3.zero
+	s.dashExitSpeed = 0
+
+	s.slideHeld = false
+	s.sliding = false
+	s.lastSlideBoostAt = -math.huge
+
+	s.fovPunch = 0
+	s.landDip = 0
+	s.roll = 0
+	s.speed = 0
+end
+resetState()
+
+------------------------------------------------------------------------
+-- Física
+------------------------------------------------------------------------
+
+local function flat(v)
+	return Vector3.new(v.X, 0, v.Z)
+end
+
+-- Acelera hacia wishDir sin pasar de wishSpeed en esa dirección (estilo Quake).
+-- La velocidad que ya llevas en otras direcciones no se toca: por eso existe el bunny-hop.
+local function accelerate(vel, wishDir, wishSpeed, accel, dt)
+	if wishDir.Magnitude < 0.01 then
+		return vel
+	end
+	local add = wishSpeed - vel:Dot(wishDir)
+	if add <= 0 then
+		return vel
+	end
+	return vel + wishDir * math.min(accel * C.WALK_SPEED * dt, add)
+end
+
+local function applyFriction(vel, amount, dt)
+	local speed = vel.Magnitude
+	if speed < 0.1 then
+		return Vector3.zero
+	end
+	local drop = math.max(speed, C.STOP_SPEED) * amount * dt
+	return vel * (math.max(speed - drop, 0) / speed)
+end
+
+-- Gira el impulso hacia donde pulsas conservando la velocidad (solo si no vas hacia atrás).
+local function steer(vel, wishDir, rate, dt)
+	local speed = vel.Magnitude
+	if speed < 0.1 or wishDir.Magnitude < 0.01 then
+		return vel
+	end
+	local dir = vel / speed
+	if dir:Dot(wishDir) <= 0 then
+		return vel
+	end
+	local newDir = dir:Lerp(wishDir, math.clamp(rate * dt, 0, 1))
+	if newDir.Magnitude < 0.001 then
+		return vel
+	end
+	return newDir.Unit * speed
+end
+
+local function groundHit()
+	local reach = humanoid.HipHeight + root.Size.Y / 2 + 0.4
+	return workspace:Raycast(root.Position, Vector3.new(0, -reach, 0), rayParams)
+end
+
+local function wishDirection()
+	local move = controls:GetMoveVector() -- x = derecha, z = -adelante (teclado, mando y táctil)
+	if move.Magnitude < 0.01 then
+		return Vector3.zero
+	end
+	local look = flat(camera.CFrame.LookVector)
+	local right = flat(camera.CFrame.RightVector)
+	if look.Magnitude < 0.01 then
+		return Vector3.zero
+	end
+	local dir = look.Unit * -move.Z + right.Unit * move.X
+	return dir.Magnitude > 0.01 and dir.Unit or Vector3.zero
+end
+
+local function step(dt)
+	if not (root and humanoid and linVel) or humanoid.Health <= 0 then
+		return
+	end
+	dt = math.min(dt, 1 / 20)
+	local now = os.clock()
+
+	local vel = root.AssemblyLinearVelocity
+	local horiz = flat(vel)
+	local vy = vel.Y
+	local setY = false
+
+	-- Suelo
+	local hit = groundHit()
+	local grounded = hit ~= nil and (now - s.lastJumpAt) > 0.1 and vy <= 2
+	if grounded then
+		if not s.wasGrounded then
+			s.landDip = math.clamp(-s.lastAirVelY / 120, 0, 1) * C.LAND_DIP_MAX
+		end
+		s.lastGroundedAt = now
+		s.airJumpsLeft = C.AIR_JUMPS
+	else
+		s.lastAirVelY = vy
+	end
+	s.wasGrounded = grounded
+
+	local wish = wishDirection()
+
+	-- Recarga de dashes
+	if s.dashCharges < C.DASH_CHARGES then
+		s.dashCharges = math.min(C.DASH_CHARGES, s.dashCharges + dt / C.DASH_RECHARGE)
+	end
+
+	-- Salto (con coyote time, buffer y doble salto)
+	if now - s.jumpBufferedAt <= C.JUMP_BUFFER then
+		local jumped = false
+		if grounded or now - s.lastGroundedAt <= C.COYOTE_TIME then
+			vy = C.JUMP_VELOCITY
+			jumped = true
+		elseif s.airJumpsLeft > 0 then
+			s.airJumpsLeft -= 1
+			vy = C.AIR_JUMP_VELOCITY
+			-- el doble salto te deja cambiar de dirección sin perder velocidad
+			if wish.Magnitude > 0 then
+				horiz = wish * math.max(horiz.Magnitude, C.WALK_SPEED)
+			end
+			jumped = true
+		end
+		if jumped then
+			setY = true
+			s.jumpBufferedAt = -math.huge
+			s.lastJumpAt = now
+			s.lastGroundedAt = -math.huge
+			grounded = false -- saltar en el mismo frame que aterrizas = sin rozamiento (bunny-hop)
+			s.sliding = false
+			humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+		end
+	end
+
+	-- Dash
+	if s.dashQueued then
+		s.dashQueued = false
+		if s.dashCharges >= 1 and now - s.dashEndsAt >= C.DASH_COOLDOWN and not s.dashing then
+			s.dashCharges -= 1
+			local look = flat(camera.CFrame.LookVector)
+			s.dashDir = wish.Magnitude > 0 and wish or (look.Magnitude > 0.01 and look.Unit or Vector3.zAxis)
+			s.dashExitSpeed = math.max(C.DASH_EXIT_SPEED, horiz.Magnitude)
+			s.dashEndsAt = now + C.DASH_DURATION
+			s.dashing = true
+			s.sliding = false
+			s.fovPunch = C.FOV_DASH_PUNCH
+		end
+	end
+
+	if s.dashing then
+		if now < s.dashEndsAt then
+			horiz = s.dashDir * C.DASH_SPEED
+			vy = 0
+			setY = true
+		else
+			s.dashing = false
+			horiz = s.dashDir * s.dashExitSpeed
+		end
+	elseif grounded then
+		-- Slide: al pulsar con velocidad suficiente
+		if s.slideHeld and not s.sliding and horiz.Magnitude >= C.SLIDE_MIN_START then
+			s.sliding = true
+			if now - s.lastSlideBoostAt >= C.SLIDE_BOOST_COOLDOWN then
+				s.lastSlideBoostAt = now
+				horiz += horiz.Unit * C.SLIDE_BOOST
+			end
+		end
+
+		if s.sliding and (not s.slideHeld or horiz.Magnitude < C.SLIDE_MIN_SPEED) then
+			s.sliding = false
+		end
+
+		if s.sliding then
+			horiz = applyFriction(horiz, C.SLIDE_FRICTION, dt)
+			-- en cuesta abajo el slide acelera
+			local n = hit.Normal
+			local g = Vector3.new(0, -C.GRAVITY, 0)
+			horiz += flat(g - n * g:Dot(n)) * dt
+			horiz = steer(horiz, wish, C.SLIDE_STEER, dt)
+		else
+			horiz = applyFriction(horiz, C.GROUND_FRICTION, dt)
+			horiz = accelerate(horiz, wish, C.WALK_SPEED, C.GROUND_ACCEL, dt)
+		end
+	else
+		horiz = accelerate(horiz, wish, C.AIR_WISH_CAP, C.AIR_ACCEL, dt)
+		horiz = steer(horiz, wish, C.AIR_STEER, dt)
+	end
+
+	if horiz.Magnitude > C.MAX_SPEED then
+		horiz = horiz.Unit * C.MAX_SPEED
+	end
+
+	linVel.VectorVelocity = horiz
+	if setY then
+		root.AssemblyLinearVelocity = Vector3.new(horiz.X, vy, horiz.Z)
+	end
+	s.speed = horiz.Magnitude
+
+	-- Estado público para otros scripts (brazos en primera persona)
+	player:SetAttribute("MovVelocidad", s.speed)
+	player:SetAttribute("MovSlide", s.sliding)
+	player:SetAttribute("MovDash", s.dashing)
+	player:SetAttribute("MovSuelo", grounded)
+	player:SetAttribute("MovUltimoSalto", s.lastJumpAt)
+end
+
+------------------------------------------------------------------------
+-- Cámara: FOV por velocidad, inclinación lateral, bajada al deslizar y al aterrizar
+------------------------------------------------------------------------
+
+local function cameraStep(dt)
+	if not humanoid then
+		return
+	end
+	local speedT = math.clamp((s.speed - C.WALK_SPEED) / (C.FOV_SPEED_FOR_MAX - C.WALK_SPEED), 0, 1)
+	s.fovPunch = s.fovPunch + (0 - s.fovPunch) * math.min(dt * 6, 1)
+	local targetFov = C.FOV_BASE + speedT * C.FOV_MAX_EXTRA + s.fovPunch
+	camera.FieldOfView += (targetFov - camera.FieldOfView) * math.min(dt * 8, 1)
+
+	local targetRoll = -controls:GetMoveVector().X * C.ROLL_MAX
+	if s.sliding then
+		targetRoll += 2
+	end
+	s.roll += (targetRoll - s.roll) * math.min(dt * 10, 1)
+	camera.CFrame *= CFrame.Angles(0, 0, math.rad(s.roll))
+
+	s.landDip += (0 - s.landDip) * math.min(dt * 10, 1)
+	local drop = (s.sliding and C.SLIDE_CAMERA_DROP or 0) + s.landDip
+	local current = humanoid.CameraOffset.Y
+	humanoid.CameraOffset = Vector3.new(0, current + (-drop - current) * math.min(dt * 14, 1), 0)
+end
+
+------------------------------------------------------------------------
+-- HUD de pruebas: velocidad y cargas de dash
+------------------------------------------------------------------------
+
+local hud = Instance.new("ScreenGui")
+hud.Name = "HUDMovimiento"
+hud.ResetOnSpawn = false
+hud.IgnoreGuiInset = true
+hud.Parent = player:WaitForChild("PlayerGui")
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.AnchorPoint = Vector2.new(0.5, 1)
+speedLabel.Position = UDim2.new(0.5, 0, 1, -40)
+speedLabel.Size = UDim2.fromOffset(200, 30)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Font = Enum.Font.GothamBold
+speedLabel.TextSize = 24
+speedLabel.TextColor3 = Color3.new(1, 1, 1)
+speedLabel.TextStrokeTransparency = 0.5
+speedLabel.Parent = hud
+
+local crosshair = Instance.new("Frame")
+crosshair.AnchorPoint = Vector2.new(0.5, 0.5)
+crosshair.Position = UDim2.fromScale(0.5, 0.5)
+crosshair.Size = UDim2.fromOffset(4, 4)
+crosshair.BackgroundColor3 = Color3.new(1, 1, 1)
+crosshair.BorderSizePixel = 0
+crosshair.Parent = hud
+
+local bars = {}
+for i = 1, C.DASH_CHARGES do
+	local back = Instance.new("Frame")
+	back.AnchorPoint = Vector2.new(0.5, 1)
+	back.Position = UDim2.new(0.5, (i - (C.DASH_CHARGES + 1) / 2) * 48, 1, -20)
+	back.Size = UDim2.fromOffset(40, 8)
+	back.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+	back.BorderSizePixel = 0
+	back.Parent = hud
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.fromScale(0, 1)
+	fill.BackgroundColor3 = Color3.fromRGB(90, 200, 255)
+	fill.BorderSizePixel = 0
+	fill.Parent = back
+	bars[i] = fill
+end
+
+local function hudStep()
+	speedLabel.Text = string.format("%d", math.floor(s.speed + 0.5))
+	for i, fill in bars do
+		fill.Size = UDim2.fromScale(math.clamp(s.dashCharges - (i - 1), 0, 1), 1)
+	end
+end
+
+------------------------------------------------------------------------
+-- Controles (teclado, mando y botones táctiles)
+------------------------------------------------------------------------
+
+-- JumpRequest sirve para teclado, mando y el botón táctil de Roblox.
+-- Mientras se mantiene pulsado se repite; solo cuenta una pulsación nueva.
+UserInputService.JumpRequest:Connect(function()
+	local now = os.clock()
+	if now - s.lastJumpRequest > 0.1 then
+		s.jumpBufferedAt = now
+	end
+	s.lastJumpRequest = now
+end)
+
+ContextActionService:BindActionAtPriority("Dash", function(_, state)
+	if state == Enum.UserInputState.Begin then
+		s.dashQueued = true
+	end
+	return Enum.ContextActionResult.Sink
+end, true, PRIORIDAD, Enum.KeyCode.LeftShift, Enum.KeyCode.Q, Enum.KeyCode.ButtonL1, Enum.KeyCode.ButtonX)
+ContextActionService:SetTitle("Dash", "Dash")
+
+ContextActionService:BindActionAtPriority("Slide", function(_, state)
+	s.slideHeld = state == Enum.UserInputState.Begin
+	return Enum.ContextActionResult.Sink
+end, true, PRIORIDAD, Enum.KeyCode.LeftControl, Enum.KeyCode.C, Enum.KeyCode.ButtonB)
+ContextActionService:SetTitle("Slide", "Slide")
+ContextActionService:SetPosition("Slide", UDim2.new(1, -170, 1, -80))
+
+------------------------------------------------------------------------
+-- Personaje
+------------------------------------------------------------------------
+
+local function onCharacter(char)
+	humanoid = char:WaitForChild("Humanoid")
+	root = char:WaitForChild("HumanoidRootPart")
+	rayParams.FilterDescendantsInstances = { char }
+	resetState()
+
+	-- El salto lo hacemos nosotros (doble salto, coyote, buffer)
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
+
+	local att = Instance.new("Attachment")
+	att.Name = "MovimientoAttachment"
+	att.Parent = root
+
+	linVel = Instance.new("LinearVelocity")
+	linVel.Name = "MovimientoVelocity"
+	linVel.Attachment0 = att
+	linVel.RelativeTo = Enum.ActuatorRelativeTo.World
+	linVel.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+	linVel.ForceLimitMode = Enum.ForceLimitMode.PerAxis
+	linVel.MaxAxesForce = Vector3.new(1e6, 0, 1e6) -- en Y manda la gravedad
+	linVel.VectorVelocity = Vector3.zero
+	linVel.Parent = root
+
+	humanoid.Died:Connect(function()
+		if linVel then
+			linVel.Enabled = false
+		end
+		linVel = nil
+	end)
+end
+
+player.CharacterAdded:Connect(onCharacter)
+if player.Character then
+	task.spawn(onCharacter, player.Character)
+end
+
+RunService.PreSimulation:Connect(step)
+RunService:BindToRenderStep("MovimientoCamara", Enum.RenderPriority.Camera.Value + 1, function(dt)
+	cameraStep(dt)
+	hudStep()
+end)
+]]></ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX9"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona (viewmodel).
+-- Dos brazos con el color de piel y la ropa del personaje, pegados a la cámara.
+-- Se balancean al andar, se retrasan al girar la vista y reaccionan al dash,
+-- al slide, al salto y al aterrizaje. Lee el estado que publica Movimiento.client.lua.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local modelo -- Model con los brazos
+local brazos = {} -- { lado = 1/-1, raiz = Part }
+
+local estado = {
+	tiempo = 0,
+	bob = 0,
+	sway = Vector2.zero,
+	slide = 0,
+	dash = 0,
+	aire = 0,
+	aterrizaje = 0,
+	estabaEnSuelo = true,
+	ultimoSalto = -math.huge,
+	salto = 0,
+}
+
+local function crearParte(nombre, tam, color, material)
+	local p = Instance.new("Part")
+	p.Name = nombre
+	p.Size = tam
+	p.Color = color
+	p.Material = material or Enum.Material.SmoothPlastic
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	return p
+end
+
+local function redondear(p)
+	-- malla simple (se puede cambiar por una malla redondeada más adelante)
+	local m = Instance.new("SpecialMesh")
+	m.MeshType = Enum.MeshType.Brick
+	m.Parent = p
+	return p
+end
+
+local function coloresDelPersonaje(char)
+	local piel = Color3.fromRGB(234, 184, 146)
+	local manga = Color3.fromRGB(45, 60, 90)
+	local bc = char:FindFirstChildOfClass("BodyColors")
+	if bc then
+		piel = bc.LeftArmColor3
+	end
+	local brazo = char:FindFirstChild("LeftHand") or char:FindFirstChild("Left Arm")
+	if brazo and not bc then
+		piel = brazo.Color
+	end
+	local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+	if torso then
+		manga = torso.Color
+	end
+	return piel, manga
+end
+
+local function construir(char)
+	if modelo then
+		modelo:Destroy()
+	end
+	brazos = {}
+	modelo = Instance.new("Model")
+	modelo.Name = "BrazosVista"
+
+	local piel, manga = coloresDelPersonaje(char)
+
+	for _, lado in { -1, 1 } do
+		local raiz = crearParte("Raiz", Vector3.new(0.05, 0.05, 0.05), piel)
+		raiz.Transparency = 1
+		raiz.Parent = modelo
+
+		-- antebrazo con manga, apuntando hacia delante (eje -Z de la cámara)
+		local antebrazo = redondear(crearParte("Antebrazo", Vector3.new(0.32, 0.32, 1.25), manga))
+		antebrazo.Parent = modelo
+		local puno = redondear(crearParte("Puno", Vector3.new(0.36, 0.36, 0.12), manga:Lerp(Color3.new(0, 0, 0), 0.25)))
+		puno.Parent = modelo
+		local mano = redondear(crearParte("Mano", Vector3.new(0.3, 0.26, 0.34), piel))
+		mano.Parent = modelo
+		local pulgar = redondear(crearParte("Pulgar", Vector3.new(0.1, 0.1, 0.18), piel))
+		pulgar.Parent = modelo
+
+		table.insert(brazos, {
+			lado = lado,
+			piezas = {
+				{ parte = antebrazo, off = CFrame.new(0, 0, 0) },
+				{ parte = puno, off = CFrame.new(0, 0, -0.62) },
+				{ parte = mano, off = CFrame.new(0, -0.01, -0.84) },
+				{ parte = pulgar, off = CFrame.new(-0.17 * lado, 0.06, -0.78) },
+			},
+		})
+	end
+
+	modelo.Parent = camera
+end
+
+local function lerp(a, b, t)
+	return a + (b - a) * t
+end
+
+local function actualizar(dt)
+	if not modelo or not modelo.Parent then
+		return
+	end
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local vivo = hum and hum.Health > 0
+	-- solo en primera persona
+	local primera = char and char:FindFirstChild("Head")
+		and (camera.CFrame.Position - char.Head.Position).Magnitude < 1.5
+	modelo.Parent = (vivo and primera) and camera or nil
+	if not (vivo and primera) then
+		return
+	end
+
+	local vel = player:GetAttribute("MovVelocidad") or 0
+	local enSlide = player:GetAttribute("MovSlide") == true
+	local enDash = player:GetAttribute("MovDash") == true
+	local enSuelo = player:GetAttribute("MovSuelo") ~= false
+	local ultimoSalto = player:GetAttribute("MovUltimoSalto") or -math.huge
+
+	local k = math.min(dt * 12, 1)
+	estado.tiempo += dt
+
+	-- balanceo al andar (más rápido y amplio con la velocidad)
+	local andar = enSuelo and not enSlide and math.clamp(vel / 16, 0, 1.6) or 0
+	estado.bob += dt * (6 + vel * 0.35) * (andar > 0.05 and 1 or 0)
+	local bobAmp = lerp(0, 1, math.min(andar, 1))
+
+	-- retraso al girar la vista
+	local delta = UserInputService:GetMouseDelta()
+	local objetivoSway = Vector2.new(math.clamp(-delta.X * 0.004, -0.15, 0.15), math.clamp(delta.Y * 0.004, -0.15, 0.15))
+	estado.sway = estado.sway:Lerp(objetivoSway, math.min(dt * 8, 1))
+
+	estado.slide = lerp(estado.slide, enSlide and 1 or 0, k)
+	estado.dash = lerp(estado.dash, enDash and 1 or 0, math.min(dt * 18, 1))
+	estado.aire = lerp(estado.aire, enSuelo and 0 or 1, math.min(dt * 6, 1))
+
+	if ultimoSalto ~= estado.ultimoSalto then
+		estado.ultimoSalto = ultimoSalto
+		estado.salto = 1
+	end
+	estado.salto = lerp(estado.salto, 0, math.min(dt * 5, 1))
+
+	if enSuelo and not estado.estabaEnSuelo then
+		estado.aterrizaje = 1
+	end
+	estado.estabaEnSuelo = enSuelo
+	estado.aterrizaje = lerp(estado.aterrizaje, 0, math.min(dt * 9, 1))
+
+	local respira = math.sin(estado.tiempo * 1.6) * 0.012
+
+	for _, b in brazos do
+		local l = b.lado
+		local fase = estado.bob + (l == 1 and math.pi or 0)
+		local bobX = math.cos(fase) * 0.05 * bobAmp
+		local bobY = math.abs(math.sin(fase)) * 0.07 * bobAmp
+
+		-- posición de reposo: abajo a cada lado, un poco hacia dentro
+		local pos = Vector3.new(0.85 * l, -0.85, -1.15)
+		local rot = CFrame.Angles(math.rad(8), math.rad(-10 * l), math.rad(-6 * l))
+
+		pos += Vector3.new(bobX, -bobY + respira, 0)
+		pos += Vector3.new(estado.sway.X, estado.sway.Y, 0)
+
+		-- slide: los brazos se abren y bajan para equilibrarse
+		pos += Vector3.new(0.35 * l, -0.15, 0.25) * estado.slide
+		rot *= CFrame.Angles(math.rad(-20) * estado.slide, 0, math.rad(-25 * l) * estado.slide)
+
+		-- dash: los brazos se van hacia atrás
+		pos += Vector3.new(0.1 * l, -0.35, 0.7) * estado.dash
+		rot *= CFrame.Angles(math.rad(35) * estado.dash, 0, 0)
+
+		-- en el aire: suben un poco; al saltar, impulso hacia arriba
+		pos += Vector3.new(0.05 * l, 0.1, 0) * estado.aire + Vector3.new(0, 0.25, 0) * estado.salto
+		rot *= CFrame.Angles(math.rad(-15) * estado.salto, 0, 0)
+
+		-- aterrizaje: bajan de golpe
+		pos += Vector3.new(0, -0.22, 0) * estado.aterrizaje
+
+		local base = camera.CFrame * CFrame.new(pos) * rot
+		for _, pieza in b.piezas do
+			pieza.parte.CFrame = base * pieza.off
+		end
+	end
+end
+
+local function alAparecer(char)
+	char:WaitForChild("Humanoid")
+	task.wait(0.2) -- espera a que carguen los colores
+	construir(char)
+end
+
+player.CharacterAdded:Connect(alAparecer)
+if player.Character then
+	task.spawn(alAparecer, player.Character)
+end
+
+RunService:BindToRenderStep("BrazosVista", Enum.RenderPriority.Camera.Value + 2, actualizar)
+]]></ProtectedString></Properties></Item></Item></Item></roblox>

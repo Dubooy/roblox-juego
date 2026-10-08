@@ -247,6 +247,13 @@ local function step(dt)
 		root.AssemblyLinearVelocity = Vector3.new(horiz.X, vy, horiz.Z)
 	end
 	s.speed = horiz.Magnitude
+
+	-- Estado público para otros scripts (brazos en primera persona)
+	player:SetAttribute("MovVelocidad", s.speed)
+	player:SetAttribute("MovSlide", s.sliding)
+	player:SetAttribute("MovDash", s.dashing)
+	player:SetAttribute("MovSuelo", grounded)
+	player:SetAttribute("MovUltimoSalto", s.lastJumpAt)
 end
 
 ------------------------------------------------------------------------
