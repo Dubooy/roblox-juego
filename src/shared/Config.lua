@@ -64,9 +64,25 @@ return {
 
 	-- Partida
 	MODO_INICIAL = "Contagio", -- más adelante se elegirá en el lobby
-	JUGADORES_MINIMOS = 2,
+	JUGADORES_MINIMOS = 2, -- cuentan los bots
 	PREPARACION = 8, -- cuenta atrás antes de cada ronda
 	VENTAJA_HUIDA = 4, -- segundos que el pillador espera quieto al empezar
 	DURACION_RONDA = 120,
 	PAUSA_FINAL = 6,
+
+	-- Correr por la pared (estilo Black Ops 3)
+	WALLRUN_DISTANCIA = 3, -- studs hasta la pared a cada lado
+	WALLRUN_VEL_MIN = 16,
+	WALLRUN_DURACION = 1.8, -- segundos máximos en la misma pared
+	WALLRUN_SUBIDA_INICIAL = 6, -- al engancharte subes un poco
+	WALLRUN_GRAVEDAD = 18, -- caída suave mientras corres
+	WALLRUN_CAIDA_MAX = 10,
+	WALLRUN_SALTO_FUERA = 32, -- salto de pared: empuje hacia fuera
+	WALLRUN_SALTO_ARRIBA = 46,
+	WALLRUN_INCLINACION = 12, -- grados de inclinación de cámara
+
+	-- Bots
+	PARTICIPANTES_OBJETIVO = 6, -- se rellenan con bots hasta este número
+	BOT_VELOCIDAD = 30,
+	BOT_PIENSA_CADA = 0.35,
 }

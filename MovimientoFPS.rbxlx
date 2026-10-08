@@ -64,29 +64,672 @@ return {
 
 	-- Partida
 	MODO_INICIAL = "Contagio", -- más adelante se elegirá en el lobby
-	JUGADORES_MINIMOS = 2,
+	JUGADORES_MINIMOS = 2, -- cuentan los bots
 	PREPARACION = 8, -- cuenta atrás antes de cada ronda
 	VENTAJA_HUIDA = 4, -- segundos que el pillador espera quieto al empezar
 	DURACION_RONDA = 120,
 	PAUSA_FINAL = 6,
+
+	-- Correr por la pared (estilo Black Ops 3)
+	WALLRUN_DISTANCIA = 3, -- studs hasta la pared a cada lado
+	WALLRUN_VEL_MIN = 16,
+	WALLRUN_DURACION = 1.8, -- segundos máximos en la misma pared
+	WALLRUN_SUBIDA_INICIAL = 6, -- al engancharte subes un poco
+	WALLRUN_GRAVEDAD = 18, -- caída suave mientras corres
+	WALLRUN_CAIDA_MAX = 10,
+	WALLRUN_SALTO_FUERA = 32, -- salto de pared: empuje hacia fuera
+	WALLRUN_SALTO_ARRIBA = 46,
+	WALLRUN_INCLINACION = 12, -- grados de inclinación de cámara
+
+	-- Bots
+	PARTICIPANTES_OBJETIVO = 6, -- se rellenan con bots hasta este número
+	BOT_VELOCIDAD = 30,
+	BOT_PIENSA_CADA = 0.35,
 }
-]]></ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX8"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX5"><Properties><string name="Name">Partida</string><ProtectedString name="Source"><![CDATA[-- Partida: manotazo (con empujón) y rondas de pilla-pilla.
+]]></ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX9"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="ModuleScript" referent="RBX5"><Properties><string name="Name">Bots</string><ProtectedString name="Source"><![CDATA[-- Bots para jugar sin más gente. Son personajes de Roblox normales controlados por el
+-- servidor: persiguen si pillan y huyen si no. Usan PathfindingService para subir por
+-- rampas y cajas, y saltan si se atascan. Dan y reciben manotazos como los jugadores.
+
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+
+local Bots = {}
+
+local NOMBRES = { "Tostada", "Pepino", "Calcetín", "Brócoli", "Turbo", "Fideo", "Croqueta", "Albóndiga", "Churro", "Mango" }
+local COLORES = {
+	Color3.fromRGB(255, 200, 150), Color3.fromRGB(240, 180, 120), Color3.fromRGB(200, 140, 100),
+	Color3.fromRGB(150, 100, 70), Color3.fromRGB(100, 70, 50), Color3.fromRGB(255, 220, 180),
+}
+local ROPA = {
+	Color3.fromRGB(220, 60, 60), Color3.fromRGB(60, 120, 220), Color3.fromRGB(60, 180, 90),
+	Color3.fromRGB(240, 190, 40), Color3.fromRGB(160, 80, 200), Color3.fromRGB(240, 120, 40),
+}
+
+local carpeta = Instance.new("Folder")
+carpeta.Name = "Bots"
+carpeta.Parent = workspace
+
+local lista = {} -- bots vivos (Model)
+
+local function crearModelo(i)
+	local desc = Instance.new("HumanoidDescription")
+	local piel = COLORES[math.random(#COLORES)]
+	desc.HeadColor = piel
+	desc.LeftArmColor = piel
+	desc.RightArmColor = piel
+	local ropa = ROPA[(i - 1) % #ROPA + 1]
+	desc.TorsoColor = ropa
+	local pantalon = ropa:Lerp(Color3.new(0, 0, 0), 0.5)
+	desc.LeftLegColor = pantalon
+	desc.RightLegColor = pantalon
+
+	local ok, modelo = pcall(function()
+		return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+	end)
+	if not ok then
+		warn("No se pudo crear un bot:", modelo)
+		return nil
+	end
+	local nombre = NOMBRES[(i - 1) % #NOMBRES + 1]
+	modelo.Name = nombre
+	modelo:SetAttribute("EsBot", true)
+	modelo:SetAttribute("NombreVisible", nombre)
+	local hum = modelo:FindFirstChildOfClass("Humanoid")
+	hum.DisplayName = nombre
+	hum.WalkSpeed = C.BOT_VELOCIDAD
+	hum.JumpPower = 60
+	hum.UseJumpPower = true
+	hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Viewer
+	return modelo
+end
+
+function Bots.lista()
+	local vivos = {}
+	for _, b in lista do
+		if b.Parent and b:FindFirstChildOfClass("Humanoid") and b:FindFirstChildOfClass("Humanoid").Health > 0 then
+			table.insert(vivos, b)
+		end
+	end
+	return vivos
+end
+
+-- Ajusta cuántos bots hay para llegar a "cuantos"
+function Bots.ajustar(cuantos, posicionInicial)
+	while #lista > cuantos do
+		local b = table.remove(lista)
+		b:Destroy()
+	end
+	local i = #lista
+	while #lista < cuantos do
+		i += 1
+		local m = crearModelo(i)
+		if not m then
+			break
+		end
+		m:PivotTo(CFrame.new(posicionInicial + Vector3.new(math.random(-20, 20), 4, math.random(-20, 20))))
+		m.Parent = carpeta
+		local root = m:FindFirstChild("HumanoidRootPart")
+		if root then
+			root:SetNetworkOwner(nil)
+		end
+		table.insert(lista, m)
+	end
+end
+
+function Bots.colocar(bot, posicion)
+	bot:PivotTo(CFrame.new(posicion))
+	local root = bot:FindFirstChild("HumanoidRootPart")
+	if root then
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+end
+
+-- Empujón a un bot (el servidor lo mueve directamente)
+function Bots.empujar(bot, vector)
+	local root = bot:FindFirstChild("HumanoidRootPart")
+	local hum = bot:FindFirstChildOfClass("Humanoid")
+	if root and hum then
+		hum:ChangeState(Enum.HumanoidStateType.Freefall)
+		root.AssemblyLinearVelocity = vector
+		bot:SetAttribute("AturdidoHasta", os.clock() + 0.6)
+	end
+end
+
+------------------------------------------------------------------------
+-- Cerebro
+------------------------------------------------------------------------
+
+local cerebros = {} -- [bot] = { objetivo, camino, waypoint, ultimoPensar, ultimaPos, atascado }
+
+-- ctx: {
+--   participantes = function() → lista,
+--   raiz = function(p) → BasePart,
+--   esPillador = function(p) → bool,
+--   puntos = function() → {Vector3} del mapa actual,
+--   golpear = function(bot, vista) (intenta un manotazo),
+--   activo = function() → bool (ronda en marcha)
+-- }
+function Bots.empezar(ctx)
+	task.spawn(function()
+		while true do
+			local ahora = os.clock()
+			for _, bot in Bots.lista() do
+				local hum = bot:FindFirstChildOfClass("Humanoid")
+				local root = bot:FindFirstChild("HumanoidRootPart")
+				local cb = cerebros[bot]
+				if not cb then
+					cb = { ultimoPensar = 0, waypoints = {}, idx = 1, ultimaPos = root.Position, atascado = 0, destino = nil, ultimoGolpe = 0 }
+					cerebros[bot] = cb
+				end
+
+				if (bot:GetAttribute("AturdidoHasta") or 0) > ahora then
+					continue
+				end
+
+				if not ctx.activo() then
+					-- entre rondas pasean
+					if ahora - cb.ultimoPensar > 3 then
+						cb.ultimoPensar = ahora
+						local pts = ctx.puntos()
+						if #pts > 0 then
+							hum:MoveTo(pts[math.random(#pts)])
+						end
+					end
+					continue
+				end
+
+				local soyPillador = ctx.esPillador(bot)
+
+				-- elegir a quién perseguir o de quién huir
+				local cercano, dist = nil, math.huge
+				for _, p in ctx.participantes() do
+					if p ~= bot then
+						local r = ctx.raiz(p)
+						if r and ctx.esPillador(p) ~= soyPillador then
+							local d = (r.Position - root.Position).Magnitude
+							if d < dist then
+								cercano, dist = p, d
+							end
+						end
+					end
+				end
+
+				-- manotazo si hay alguien delante y cerca (los que huyen también empujan)
+				if cercano and dist <= C.MANOTAZO_ALCANCE and ahora - cb.ultimoGolpe > C.MANOTAZO_ESPERA * 1.6 then
+					local r = ctx.raiz(cercano)
+					if r then
+						cb.ultimoGolpe = ahora
+						-- los que huyen solo empujan a veces, para no ser imposibles
+						if soyPillador or math.random() < 0.35 then
+							ctx.golpear(bot, (r.Position - root.Position).Unit)
+						end
+					end
+				end
+
+				if ahora - cb.ultimoPensar >= C.BOT_PIENSA_CADA then
+					cb.ultimoPensar = ahora
+					local destino
+					if cercano then
+						local r = ctx.raiz(cercano)
+						if soyPillador then
+							-- un poco por delante de hacia donde va
+							destino = r.Position + r.AssemblyLinearVelocity * 0.25
+						else
+							-- huir: el punto del mapa más lejos del pillador, sin ir hacia él
+							local mejor, mejorValor = nil, -math.huge
+							for _, pt in ctx.puntos() do
+								local alejado = (pt - r.Position).Magnitude
+								local cerca = (pt - root.Position).Magnitude
+								local haciaEl = (pt - root.Position).Unit:Dot((r.Position - root.Position).Unit)
+								local valor = alejado - cerca * 0.5 - math.max(haciaEl, 0) * 60
+								if valor > mejorValor then
+									mejor, mejorValor = pt, valor
+								end
+							end
+							destino = mejor
+						end
+					else
+						local pts = ctx.puntos()
+						destino = #pts > 0 and pts[math.random(#pts)] or nil
+					end
+
+					if destino then
+						-- cerca y a la vista: ir directo; lejos: pathfinding
+						if soyPillador and dist < 25 then
+							cb.waypoints = { { Position = destino, Action = Enum.PathWaypointAction.Walk } }
+							cb.idx = 1
+						else
+							local camino = PathfindingService:CreatePath({ AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 6 })
+							local ok = pcall(function()
+								camino:ComputeAsync(root.Position, destino)
+							end)
+							if ok and camino.Status == Enum.PathStatus.Success then
+								cb.waypoints = camino:GetWaypoints()
+								cb.idx = math.min(2, #cb.waypoints)
+							else
+								cb.waypoints = { { Position = destino, Action = Enum.PathWaypointAction.Walk } }
+								cb.idx = 1
+							end
+						end
+					end
+				end
+
+				-- seguir el camino
+				local wp = cb.waypoints[cb.idx]
+				if wp then
+					hum:MoveTo(wp.Position)
+					if wp.Action == Enum.PathWaypointAction.Jump then
+						hum.Jump = true
+					end
+					local plano = Vector3.new(wp.Position.X - root.Position.X, 0, wp.Position.Z - root.Position.Z)
+					if plano.Magnitude < 3 then
+						cb.idx += 1
+					end
+				end
+
+				-- ¿atascado? saltar
+				local movido = (root.Position - cb.ultimaPos).Magnitude
+				cb.ultimaPos = root.Position
+				if wp and movido < 0.15 then
+					cb.atascado += 1
+					if cb.atascado > 4 then
+						hum.Jump = true
+						cb.atascado = 0
+						cb.ultimoPensar = 0
+					end
+				else
+					cb.atascado = 0
+				end
+			end
+			task.wait(0.1)
+		end
+	end)
+end
+
+return Bots
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX6"><Properties><string name="Name">Mapas</string><ProtectedString name="Source"><![CDATA[-- Los mapas del pilla-pilla. Se construyen por código al arrancar el servidor
+-- (así no hace falta modelar nada en Studio). Cada mapa es pequeño y vertical,
+-- con paredes largas para correr por ellas.
 --
--- Modos previstos: "Contagio" y "CoronaRobada". Se elegirán en un lobby más
--- adelante; de momento se juega siempre C.MODO_INICIAL. Cada modo es una tabla
--- con empezar / alGolpear / terminada / resultado, así añadir uno nuevo no toca el resto.
+-- Mapas.construir() crea todos y devuelve una lista:
+--   { nombre, centro (Vector3), apariciones = {Vector3}, alturaMinima, puntos = {Vector3} }
+-- "puntos" son sitios repartidos por el mapa que usan los bots para moverse.
+
+local Mapas = {}
+
+------------------------------------------------------------------------
+-- Ayudas para construir
+------------------------------------------------------------------------
+
+local function parte(padre, props)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	for k, v in props do
+		p[k] = v
+	end
+	p.Parent = padre
+	return p
+end
+
+local function bloque(padre, tam, pos, color, material, extra)
+	local props = { Size = tam, CFrame = typeof(pos) == "CFrame" and pos or CFrame.new(pos), Color = color, Material = material or Enum.Material.SmoothPlastic }
+	for k, v in extra or {} do
+		props[k] = v
+	end
+	return parte(padre, props)
+end
+
+-- barra cilíndrica entre dos puntos
+local function barra(padre, a, b, grosor, color)
+	local largo = (b - a).Magnitude
+	local p = parte(padre, {
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(largo, grosor, grosor),
+		CFrame = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, math.rad(90), 0),
+		Color = color,
+		Material = Enum.Material.Metal,
+	})
+	return p
+end
+
+local function rampa(padre, desde, hasta, ancho, color, material)
+	-- rampa (cuña aplanada) de "desde" a "hasta", ambos a nivel de la superficie
+	local dir = hasta - desde
+	local plano = Vector3.new(dir.X, 0, dir.Z)
+	local largo = dir.Magnitude
+	local cf = CFrame.lookAt((desde + hasta) / 2, (desde + hasta) / 2 + dir)
+	return bloque(padre, Vector3.new(ancho, 1, largo), cf * CFrame.new(0, -0.5, 0), color, material)
+end
+
+------------------------------------------------------------------------
+-- Mapa 1: Parque de calistenia y parkour
+------------------------------------------------------------------------
+
+local function parque(raiz, origen)
+	local m = Instance.new("Model")
+	m.Name = "ParqueCalistenia"
+	m.Parent = raiz
+	local o = origen
+
+	local CAUCHO = Color3.fromRGB(64, 120, 88)
+	local CAUCHO2 = Color3.fromRGB(196, 92, 60)
+	local HORMIGON = Color3.fromRGB(190, 186, 178)
+	local METAL = Color3.fromRGB(40, 44, 52)
+	local AMARILLO = Color3.fromRGB(240, 196, 60)
+	local MADERA = Color3.fromRGB(160, 116, 74)
+
+	-- suelo de caucho con césped alrededor
+	bloque(m, Vector3.new(260, 2, 260), o + Vector3.new(0, -1, 0), Color3.fromRGB(96, 160, 72), Enum.Material.Grass)
+	bloque(m, Vector3.new(170, 0.4, 170), o + Vector3.new(0, 0.2, 0), CAUCHO, Enum.Material.Fabric)
+	for i = -2, 2 do
+		bloque(m, Vector3.new(170, 0.42, 3), o + Vector3.new(0, 0.21, i * 34), CAUCHO2, Enum.Material.Fabric)
+	end
+
+	-- valla perimetral (muy alta para no salir)
+	for _, lado in { { Vector3.new(0, 0, 90), Vector3.new(184, 40, 1) }, { Vector3.new(0, 0, -90), Vector3.new(184, 40, 1) }, { Vector3.new(90, 0, 0), Vector3.new(1, 40, 184) }, { Vector3.new(-90, 0, 0), Vector3.new(1, 40, 184) } } do
+		bloque(m, lado[2], o + lado[1] + Vector3.new(0, 20, 0), METAL, Enum.Material.DiamondPlate, { Transparency = 0.6 })
+	end
+
+	-- 1. Muros de parkour para correr por ellos (pares paralelos con hueco en medio)
+	local muros = {
+		{ Vector3.new(-50, 0, -55), 0 },
+		{ Vector3.new(50, 0, 55), 0 },
+		{ Vector3.new(-62, 0, 30), 90 },
+		{ Vector3.new(62, 0, -30), 90 },
+	}
+	for _, mu in muros do
+		local cf = CFrame.new(o + mu[1]) * CFrame.Angles(0, math.rad(mu[2]), 0)
+		bloque(m, Vector3.new(44, 16, 2), cf * CFrame.new(0, 8, -9), HORMIGON, Enum.Material.Concrete)
+		bloque(m, Vector3.new(44, 16, 2), cf * CFrame.new(0, 8, 9), HORMIGON, Enum.Material.Concrete)
+		-- franja de color en lo alto, para ver bien los muros
+		bloque(m, Vector3.new(44, 1, 2.2), cf * CFrame.new(0, 16, -9), AMARILLO)
+		bloque(m, Vector3.new(44, 1, 2.2), cf * CFrame.new(0, 16, 9), AMARILLO)
+	end
+
+	-- 2. Torre central de barras: tres pisos de plataformas unidas por barras
+	local tc = o + Vector3.new(0, 0, 0)
+	for _, x in { -14, 14 } do
+		for _, z in { -14, 14 } do
+			barra(m, tc + Vector3.new(x, 0, z), tc + Vector3.new(x, 38, z), 1.4, METAL)
+		end
+	end
+	for i, y in { 10, 20, 30 } do
+		local hueco = (i % 2 == 0) and -1 or 1
+		-- plataforma con un hueco por el que subir saltando
+		bloque(m, Vector3.new(30, 1, 18), tc + Vector3.new(0, y, 6 * hueco), MADERA, Enum.Material.WoodPlanks)
+		for _, x in { -14, 14 } do
+			barra(m, tc + Vector3.new(x, y + 4, -14), tc + Vector3.new(x, y + 4, 14), 0.8, METAL)
+		end
+	end
+	-- techo de la torre: el sitio más alto del parque
+	bloque(m, Vector3.new(32, 1, 32), tc + Vector3.new(0, 39, 0), CAUCHO2, Enum.Material.Fabric)
+	-- cajas para subir a la primera plataforma
+	bloque(m, Vector3.new(8, 4, 8), tc + Vector3.new(-22, 2, 6), MADERA, Enum.Material.WoodPlanks)
+	bloque(m, Vector3.new(8, 7, 8), tc + Vector3.new(-22, 3.5, -4), MADERA, Enum.Material.WoodPlanks)
+	bloque(m, Vector3.new(8, 4, 8), tc + Vector3.new(22, 2, -6), MADERA, Enum.Material.WoodPlanks)
+
+	-- 3. Barras de dominadas en fila (para pasar por debajo deslizando o saltar encima)
+	for i = 0, 4 do
+		local z = -70 + i * 9
+		local x = 20
+		barra(m, o + Vector3.new(x - 6, 0, z), o + Vector3.new(x - 6, 9 + i, z), 0.8, METAL)
+		barra(m, o + Vector3.new(x + 6, 0, z), o + Vector3.new(x + 6, 9 + i, z), 0.8, METAL)
+		barra(m, o + Vector3.new(x - 6, 9 + i, z), o + Vector3.new(x + 6, 9 + i, z), 0.6, METAL)
+	end
+
+	-- 4. Escalera horizontal (pasamanos) elevada que hace de puente
+	local a, b = o + Vector3.new(-40, 0, 70), o + Vector3.new(-40, 0, 40)
+	for _, x in { -3, 3 } do
+		barra(m, a + Vector3.new(x, 0, 0), a + Vector3.new(x, 12, 0), 0.8, METAL)
+		barra(m, b + Vector3.new(x, 0, 0), b + Vector3.new(x, 12, 0), 0.8, METAL)
+		barra(m, a + Vector3.new(x, 12, 0), b + Vector3.new(x, 12, 0), 0.7, METAL)
+	end
+	for z = 0, 10 do
+		barra(m, a + Vector3.new(-3, 12, -z * 3), a + Vector3.new(3, 12, -z * 3), 0.4, AMARILLO)
+	end
+
+	-- 5. Cajones pliométricos escalonados
+	for i, h in { 3, 5, 8, 11, 14 } do
+		bloque(m, Vector3.new(7, h, 7), o + Vector3.new(-75 + i * 9, h / 2, -20), i % 2 == 0 and CAUCHO2 or MADERA, Enum.Material.WoodPlanks)
+	end
+
+	-- 6. Paralelas y bancos inclinados (para deslizar)
+	for i = 0, 2 do
+		local base = o + Vector3.new(70, 0, 0 + i * 14)
+		barra(m, base + Vector3.new(-8, 4, -2), base + Vector3.new(8, 4, -2), 0.6, METAL)
+		barra(m, base + Vector3.new(-8, 4, 2), base + Vector3.new(8, 4, 2), 0.6, METAL)
+		for _, x in { -8, 8 } do
+			barra(m, base + Vector3.new(x, 0, -2), base + Vector3.new(x, 4, -2), 0.6, METAL)
+			barra(m, base + Vector3.new(x, 0, 2), base + Vector3.new(x, 4, 2), 0.6, METAL)
+		end
+	end
+	rampa(m, o + Vector3.new(30, 0.4, 20), o + Vector3.new(30, 9, 44), 10, HORMIGON, Enum.Material.Concrete)
+	bloque(m, Vector3.new(10, 9, 14), o + Vector3.new(30, 4.5, 51), HORMIGON, Enum.Material.Concrete)
+
+	-- 7. Árboles de decoración por fuera
+	for i = 0, 11 do
+		local ang = i / 12 * math.pi * 2
+		local p = o + Vector3.new(math.cos(ang) * 115, 0, math.sin(ang) * 115)
+		bloque(m, Vector3.new(2.5, 14, 2.5), p + Vector3.new(0, 7, 0), Color3.fromRGB(110, 76, 50), Enum.Material.Wood)
+		parte(m, { Shape = Enum.PartType.Ball, Size = Vector3.new(14, 14, 14), Position = p + Vector3.new(0, 18, 0), Color = Color3.fromRGB(70, 140, 60), Material = Enum.Material.Grass })
+	end
+
+	local apariciones, puntos = {}, {}
+	for i = 0, 7 do
+		local ang = i / 8 * math.pi * 2
+		table.insert(apariciones, o + Vector3.new(math.cos(ang) * 60, 4, math.sin(ang) * 60))
+	end
+	for x = -70, 70, 28 do
+		for z = -70, 70, 28 do
+			table.insert(puntos, o + Vector3.new(x, 3, z))
+		end
+	end
+	table.insert(puntos, tc + Vector3.new(0, 12, 6))
+	table.insert(puntos, tc + Vector3.new(0, 41, 0))
+
+	return { nombre = "Parque de calistenia", modelo = m, centro = o, apariciones = apariciones, alturaMinima = o.Y - 30, puntos = puntos }
+end
+
+------------------------------------------------------------------------
+-- Mapa 2: Torre de obras
+------------------------------------------------------------------------
+
+local function obras(raiz, origen)
+	local m = Instance.new("Model")
+	m.Name = "TorreObras"
+	m.Parent = raiz
+	local o = origen
+
+	local TIERRA = Color3.fromRGB(150, 118, 84)
+	local HORMIGON = Color3.fromRGB(168, 166, 160)
+	local ACERO = Color3.fromRGB(214, 120, 40)
+	local ANDAMIO = Color3.fromRGB(110, 116, 126)
+	local TABLON = Color3.fromRGB(176, 140, 90)
+	local AMARILLO = Color3.fromRGB(245, 200, 40)
+	local AZUL = Color3.fromRGB(40, 90, 160)
+
+	-- solar de obra
+	bloque(m, Vector3.new(220, 2, 220), o + Vector3.new(0, -1, 0), TIERRA, Enum.Material.Ground)
+	for _, lado in { { Vector3.new(0, 0, 80), Vector3.new(164, 40, 1) }, { Vector3.new(0, 0, -80), Vector3.new(164, 40, 1) }, { Vector3.new(80, 0, 0), Vector3.new(1, 40, 164) }, { Vector3.new(-80, 0, 0), Vector3.new(1, 40, 164) } } do
+		bloque(m, lado[2], o + lado[1] + Vector3.new(0, 20, 0), Color3.fromRGB(230, 230, 230), Enum.Material.SmoothPlastic, { Transparency = 0.7 })
+	end
+
+	-- el edificio: 6 forjados de 56x56, 16 de altura entre plantas
+	local ALTURA, LADO, PISOS = 16, 56, 6
+	for piso = 0, PISOS do
+		local y = piso * ALTURA
+		if piso > 0 then
+			-- forjado con un hueco de escalera que cambia de esquina en cada planta
+			local hx = (piso % 2 == 0) and 1 or -1
+			bloque(m, Vector3.new(LADO, 1.2, LADO - 14), o + Vector3.new(0, y, -7 * hx), HORMIGON, Enum.Material.Concrete)
+			bloque(m, Vector3.new(LADO - 16, 1.2, 14), o + Vector3.new(-8 * hx, y, (LADO / 2 - 7) * hx), HORMIGON, Enum.Material.Concrete)
+		end
+		if piso < PISOS then
+			-- pilares
+			for _, x in { -26, 0, 26 } do
+				for _, z in { -26, 0, 26 } do
+					if not (x == 0 and z == 0) then
+						bloque(m, Vector3.new(2.5, ALTURA, 2.5), o + Vector3.new(x, y + ALTURA / 2, z), HORMIGON, Enum.Material.Concrete)
+					end
+				end
+			end
+			-- tabiques sueltos para correr por ellos (cambian de sitio en cada planta)
+			local giro = piso * 47 % 180
+			local cf = CFrame.new(o + Vector3.new(0, y + 6.5, 0)) * CFrame.Angles(0, math.rad(giro), 0)
+			bloque(m, Vector3.new(30, 11, 1.5), cf * CFrame.new(0, 0, -11), AZUL, Enum.Material.Brick)
+			bloque(m, Vector3.new(30, 11, 1.5), cf * CFrame.new(0, 0, 11), AZUL, Enum.Material.Brick)
+			-- rampa de una planta a la siguiente dentro del hueco
+			local hx = ((piso + 1) % 2 == 0) and 1 or -1
+			local ini = o + Vector3.new((LADO / 2 - 10) * hx, y + 0.6, (LADO / 2 - 30) * hx)
+			local fin = o + Vector3.new((LADO / 2 - 10) * hx, y + ALTURA + 0.6, (LADO / 2 - 2) * hx)
+			rampa(m, ini, fin, 12, TABLON, Enum.Material.WoodPlanks)
+		end
+	end
+	-- azotea con barandilla baja
+	local top = PISOS * ALTURA
+	for _, cfg in { { Vector3.new(0, 0, 28), Vector3.new(56, 3, 1) }, { Vector3.new(0, 0, -28), Vector3.new(56, 3, 1) }, { Vector3.new(28, 0, 0), Vector3.new(1, 3, 56) }, { Vector3.new(-28, 0, 0), Vector3.new(1, 3, 56) } } do
+		bloque(m, cfg[2], o + cfg[1] + Vector3.new(0, top + 2, 0), AMARILLO)
+	end
+
+	-- andamios por fuera, en dos caras: plataformas de tablones cada media planta
+	for _, cara in { 1, -1 } do
+		local x = cara * (LADO / 2 + 6)
+		for z = -24, 24, 12 do
+			barra(m, o + Vector3.new(x - 3, 0, z), o + Vector3.new(x - 3, top, z), 0.5, ANDAMIO)
+			barra(m, o + Vector3.new(x + 3, 0, z), o + Vector3.new(x + 3, top, z), 0.5, ANDAMIO)
+		end
+		for nivel = 1, PISOS * 2 - 1 do
+			local y = nivel * ALTURA / 2
+			-- tablones a tramos, alternando, para obligar a saltar
+			local desfase = (nivel % 2 == 0) and 6 or -6
+			bloque(m, Vector3.new(6, 0.6, 22), o + Vector3.new(x, y, -14 + desfase), TABLON, Enum.Material.WoodPlanks)
+			bloque(m, Vector3.new(6, 0.6, 14), o + Vector3.new(x, y, 18 + desfase), TABLON, Enum.Material.WoodPlanks)
+			barra(m, o + Vector3.new(x + 3, y + 3.5, -24), o + Vector3.new(x + 3, y + 3.5, 24), 0.4, ANDAMIO)
+		end
+	end
+	-- lona en la otra cara: una pared enorme para correr
+	bloque(m, Vector3.new(LADO, top - 4, 0.6), o + Vector3.new(0, top / 2, LADO / 2 + 5), Color3.fromRGB(60, 140, 90), Enum.Material.Fabric)
+	bloque(m, Vector3.new(LADO, top - 4, 0.6), o + Vector3.new(0, top / 2, -LADO / 2 - 5), Color3.fromRGB(60, 140, 90), Enum.Material.Fabric)
+
+	-- grúa torre al lado, con la pluma pasando por encima de la azotea
+	local g = o + Vector3.new(-58, 0, -50)
+	for _, dx in { -2, 2 } do
+		for _, dz in { -2, 2 } do
+			barra(m, g + Vector3.new(dx, 0, dz), g + Vector3.new(dx, top + 24, dz), 0.6, AMARILLO)
+		end
+	end
+	for y = 4, top + 20, 8 do
+		bloque(m, Vector3.new(5, 0.4, 5), g + Vector3.new(0, y, 0), AMARILLO, Enum.Material.DiamondPlate)
+	end
+	-- la pluma: una pasarela larga a gran altura
+	local pluma = CFrame.lookAt(g + Vector3.new(0, top + 24, 0), o + Vector3.new(30, top + 24, 40))
+	bloque(m, Vector3.new(4, 1, 120), pluma * CFrame.new(0, 0, -50), AMARILLO, Enum.Material.DiamondPlate)
+	bloque(m, Vector3.new(6, 4, 14), pluma * CFrame.new(0, -2, 16), HORMIGON, Enum.Material.Concrete) -- contrapeso
+	-- carga colgando a mitad de pluma (plataforma de paso)
+	bloque(m, Vector3.new(12, 1, 8), pluma * CFrame.new(0, -14, -60), TABLON, Enum.Material.WoodPlanks)
+	barra(m, (pluma * CFrame.new(0, 0, -60)).Position, (pluma * CFrame.new(0, -14, -60)).Position, 0.3, Color3.fromRGB(30, 30, 30))
+
+	-- contenedores y vigas por el suelo
+	local colores = { Color3.fromRGB(180, 50, 40), Color3.fromRGB(40, 110, 170), Color3.fromRGB(60, 140, 70) }
+	for i = 0, 5 do
+		local ang = i / 6 * math.pi * 2 + 0.4
+		local p = o + Vector3.new(math.cos(ang) * 58, 0, math.sin(ang) * 58)
+		local cf = CFrame.new(p) * CFrame.Angles(0, ang, 0)
+		bloque(m, Vector3.new(8, 8.5, 20), cf * CFrame.new(0, 4.25, 0), colores[i % 3 + 1], Enum.Material.CorrodedMetal)
+		if i % 2 == 0 then
+			bloque(m, Vector3.new(8, 8.5, 20), cf * CFrame.new(0, 12.75, 3), colores[(i + 1) % 3 + 1], Enum.Material.CorrodedMetal)
+		end
+	end
+	for i = 0, 3 do
+		bloque(m, Vector3.new(1.5, 2, 26), CFrame.new(o + Vector3.new(44, 1 + i * 2, -10 + i)) * CFrame.Angles(0, math.rad(i * 12), 0), ACERO, Enum.Material.Metal)
+	end
+
+	local apariciones, puntos = {}, {}
+	for i = 0, 7 do
+		local ang = i / 8 * math.pi * 2
+		table.insert(apariciones, o + Vector3.new(math.cos(ang) * 45, 4, math.sin(ang) * 45))
+	end
+	for piso = 0, PISOS do
+		for _, x in { -18, 18 } do
+			for _, z in { -18, 18 } do
+				table.insert(puntos, o + Vector3.new(x, piso * ALTURA + 3, z))
+			end
+		end
+	end
+	for i = 0, 7 do
+		local ang = i / 8 * math.pi * 2
+		table.insert(puntos, o + Vector3.new(math.cos(ang) * 50, 3, math.sin(ang) * 50))
+	end
+
+	return { nombre = "Torre de obras", modelo = m, centro = o, apariciones = apariciones, alturaMinima = o.Y - 30, puntos = puntos }
+end
+
+------------------------------------------------------------------------
+
+function Mapas.construir()
+	-- quitar lo que trae la plantilla Baseplate
+	for _, nombre in { "Baseplate", "SpawnLocation", "Mapas" } do
+		local v = workspace:FindFirstChild(nombre)
+		if v then
+			v:Destroy()
+		end
+	end
+	local raiz = Instance.new("Folder")
+	raiz.Name = "Mapas"
+	raiz.Parent = workspace
+
+	local lista = {
+		parque(raiz, Vector3.new(0, 0, 0)),
+		obras(raiz, Vector3.new(600, 0, 0)),
+	}
+
+	-- aparición entre rondas: en el parque
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Name = "SpawnLocation"
+	spawn.Anchored = true
+	spawn.Size = Vector3.new(10, 1, 10)
+	spawn.Position = Vector3.new(0, 0.5, 70)
+	spawn.Transparency = 1
+	spawn.CanCollide = false
+	spawn.Neutral = true
+	spawn.Duration = 0
+	spawn.Parent = raiz
+
+	local luz = game:GetService("Lighting")
+	luz.ClockTime = 15.5
+	luz.Brightness = 2.5
+	luz.OutdoorAmbient = Color3.fromRGB(140, 140, 150)
+
+	return lista
+end
+
+return Mapas
+]]></ProtectedString></Properties></Item><Item class="Script" referent="RBX7"><Properties><string name="Name">Partida</string><ProtectedString name="Source"><![CDATA[-- Partida: manotazo (con empujón), bots y rondas de pilla-pilla en dos mapas.
 --
--- Estado público (lo leen los clientes para el HUD):
---   ReplicatedStorage:GetAttribute("Fase")    "Esperando" | "Preparando" | "Jugando" | "Fin"
---   ReplicatedStorage:GetAttribute("Modo")    nombre del modo
---   ReplicatedStorage:GetAttribute("Tiempo")  segundos que quedan de la fase
---   ReplicatedStorage:GetAttribute("Mensaje") texto grande en pantalla
---   player:GetAttribute("Pillador")           true si pilla
+-- "Participante" = un Player o un bot (Model). Los dos guardan su equipo en el
+-- atributo "Pillador" y se marcan con un Highlight rojo (pilla) o azul (huye).
+--
+-- Modos previstos: "Contagio" y "CoronaRobada". Se elegirán en el lobby más
+-- adelante; de momento se juega siempre C.MODO_INICIAL. Los mapas se van alternando.
+--
+-- Estado público para el HUD (atributos de ReplicatedStorage):
+--   Fase "Esperando" | "Preparando" | "Jugando" | "Fin", Modo, Mapa, Tiempo, Mensaje
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Mapas = require(script.Parent:WaitForChild("Mapas"))
+local Bots = require(script.Parent:WaitForChild("Bots"))
+
+local mapas = Mapas.construir()
+local mapaActual = mapas[1]
+local indiceMapa = 0
 
 ------------------------------------------------------------------------
 -- Remotos
@@ -103,58 +746,100 @@ local function remoto(nombre)
 	return r
 end
 
-local Manotazo = remoto("Manotazo") -- cliente → servidor: "he dado un manotazo" (dirección de la vista)
+local Manotazo = remoto("Manotazo") -- cliente → servidor: dirección de la vista
 local Empujon = remoto("Empujon") -- servidor → golpeado: vector de empujón
-local Golpe = remoto("Golpe") -- servidor → todos: (atacante, golpeado) para efectos
+local Golpe = remoto("Golpe") -- servidor → todos: (modelo atacante, modelo golpeado) para efectos
 
 ------------------------------------------------------------------------
--- Utilidades
+-- Participantes (jugadores y bots)
 ------------------------------------------------------------------------
 
-local function raiz(player)
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
+local function modeloDe(p)
+	if p:IsA("Player") then
+		return p.Character
+	end
+	return p
+end
+
+local function nombreDe(p)
+	if p:IsA("Player") then
+		return p.DisplayName
+	end
+	return p:GetAttribute("NombreVisible") or p.Name
+end
+
+local function raiz(p)
+	local m = modeloDe(p)
+	local hum = m and m:FindFirstChildOfClass("Humanoid")
 	if not (hum and hum.Health > 0) then
 		return nil
 	end
-	return char:FindFirstChild("HumanoidRootPart")
+	return m:FindFirstChild("HumanoidRootPart")
+end
+
+local function participantes()
+	local lista = {}
+	for _, p in Players:GetPlayers() do
+		if raiz(p) then
+			table.insert(lista, p)
+		end
+	end
+	for _, b in Bots.lista() do
+		table.insert(lista, b)
+	end
+	return lista
+end
+
+local function esPillador(p)
+	return p:GetAttribute("Pillador") == true
+end
+
+local function colocar(p, posicion)
+	local m = modeloDe(p)
+	if m then
+		m:PivotTo(CFrame.new(posicion) * CFrame.Angles(0, math.random() * math.pi * 2, 0))
+		local r = m:FindFirstChild("HumanoidRootPart")
+		if r then
+			r.AssemblyLinearVelocity = Vector3.zero
+			r:SetAttribute("Teletransportado", true) -- que el anti-trampas no lo cuente
+		end
+	end
+end
+
+local COLOR_PILLADOR = Color3.fromRGB(255, 70, 70)
+local COLOR_HUYE = Color3.fromRGB(80, 200, 255)
+
+local function marcar(p, pillador)
+	p:SetAttribute("Pillador", pillador)
+	local m = modeloDe(p)
+	if not m then
+		return
+	end
+	local h = m:FindFirstChild("MarcaEquipo")
+	if not h then
+		h = Instance.new("Highlight")
+		h.Name = "MarcaEquipo"
+		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- se ve a través de las paredes
+		h.FillTransparency = 0.75
+		h.Parent = m
+	end
+	h.FillColor = pillador and COLOR_PILLADOR or COLOR_HUYE
+	h.OutlineColor = h.FillColor
+end
+
+local function quitarMarca(p)
+	p:SetAttribute("Pillador", nil)
+	local m = modeloDe(p)
+	local h = m and m:FindFirstChild("MarcaEquipo")
+	if h then
+		h:Destroy()
+	end
 end
 
 local function fijarFase(fase, tiempo, mensaje)
 	ReplicatedStorage:SetAttribute("Fase", fase)
 	ReplicatedStorage:SetAttribute("Tiempo", tiempo or 0)
 	ReplicatedStorage:SetAttribute("Mensaje", mensaje or "")
-end
-
-local COLOR_PILLADOR = Color3.fromRGB(255, 70, 70)
-local COLOR_HUYE = Color3.fromRGB(80, 200, 255)
-
-local function marcar(player, pillador)
-	player:SetAttribute("Pillador", pillador)
-	local char = player.Character
-	if not char then
-		return
-	end
-	local h = char:FindFirstChild("MarcaEquipo")
-	if not h then
-		h = Instance.new("Highlight")
-		h.Name = "MarcaEquipo"
-		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- se ve a través de las paredes
-		h.FillTransparency = 0.75
-		h.Parent = char
-	end
-	h.FillColor = pillador and COLOR_PILLADOR or COLOR_HUYE
-	h.OutlineColor = h.FillColor
-	h.Enabled = true
-end
-
-local function quitarMarca(player)
-	player:SetAttribute("Pillador", nil)
-	local char = player.Character
-	local h = char and char:FindFirstChild("MarcaEquipo")
-	if h then
-		h:Destroy()
-	end
 end
 
 ------------------------------------------------------------------------
@@ -164,36 +849,35 @@ end
 local Modos = {}
 
 -- Contagio: uno empieza pillando; cada uno que toca pasa a pillar.
--- Ganan los que huyen si queda alguno al acabar el tiempo.
 Modos.Contagio = {
 	nombre = "Contagio",
-	empezar = function(jugadores)
-		local primero = jugadores[math.random(#jugadores)]
-		for _, p in jugadores do
+	empezar = function(lista)
+		local primero = lista[math.random(#lista)]
+		for _, p in lista do
 			marcar(p, p == primero)
 		end
-		return { primero }, primero.DisplayName .. " pilla. ¡Corred!"
+		return { primero }, nombreDe(primero) .. " pilla. ¡Corred!"
 	end,
 	alGolpear = function(atacante, golpeado)
-		if atacante:GetAttribute("Pillador") and not golpeado:GetAttribute("Pillador") then
+		if esPillador(atacante) and not esPillador(golpeado) then
 			marcar(golpeado, true)
-			return golpeado.DisplayName .. " ha sido pillado"
+			return nombreDe(golpeado) .. " ha sido pillado"
 		end
 		return nil
 	end,
-	terminada = function(jugadores)
-		for _, p in jugadores do
-			if not p:GetAttribute("Pillador") then
+	terminada = function(lista)
+		for _, p in lista do
+			if not esPillador(p) then
 				return false
 			end
 		end
 		return true
 	end,
-	resultado = function(jugadores, porTiempo)
+	resultado = function(lista)
 		local libres = {}
-		for _, p in jugadores do
-			if not p:GetAttribute("Pillador") then
-				table.insert(libres, p.DisplayName)
+		for _, p in lista do
+			if not esPillador(p) then
+				table.insert(libres, nombreDe(p))
 			end
 		end
 		if #libres == 0 then
@@ -209,17 +893,16 @@ Modos.Contagio = {
 -- Manotazo
 ------------------------------------------------------------------------
 
-local ultimoManotazo = {} -- [player] = os.clock()
-local enJuego = {} -- [player] = true durante la ronda
+local ultimoManotazo = {} -- [participante] = os.clock()
+local enJuego = {} -- [participante] = true durante la ronda
 local modoActual = nil
 local faseJugando = false
 
-Manotazo.OnServerEvent:Connect(function(atacante, vista)
+local function golpear(atacante, vista)
 	if typeof(vista) ~= "Vector3" or vista.Magnitude < 0.5 then
 		return
 	end
 	local ahora = os.clock()
-	-- un poco de margen por la latencia
 	if ahora - (ultimoManotazo[atacante] or -math.huge) < C.MANOTAZO_ESPERA * 0.8 then
 		return
 	end
@@ -231,19 +914,16 @@ Manotazo.OnServerEvent:Connect(function(atacante, vista)
 	end
 	vista = vista.Unit
 
-	-- el jugador más cercano delante de ti dentro del alcance
+	-- el participante más cercano delante del atacante (con margen por la latencia)
 	local mejor, mejorDist = nil, math.huge
-	for _, otro in Players:GetPlayers() do
+	for _, otro in participantes() do
 		if otro ~= atacante then
 			local ro = raiz(otro)
 			if ro then
 				local d = ro.Position - r.Position
 				local dist = d.Magnitude
-				-- margen extra por latencia: el otro puede haberse movido un poco
-				if dist <= C.MANOTAZO_ALCANCE + 3 and dist > 0 and d.Unit:Dot(vista) >= C.MANOTAZO_ANGULO - 0.15 then
-					if dist < mejorDist then
-						mejor, mejorDist = otro, dist
-					end
+				if dist > 0 and dist <= C.MANOTAZO_ALCANCE + 3 and d.Unit:Dot(vista) >= C.MANOTAZO_ANGULO - 0.15 and dist < mejorDist then
+					mejor, mejorDist = otro, dist
 				end
 			end
 		end
@@ -252,18 +932,22 @@ Manotazo.OnServerEvent:Connect(function(atacante, vista)
 		return
 	end
 
-	-- empujón: hacia donde miras, con una parte de tu velocidad
 	local plano = Vector3.new(vista.X, 0, vista.Z)
 	if plano.Magnitude < 0.1 then
-		plano = Vector3.new((raiz(mejor).Position - r.Position).X, 0, (raiz(mejor).Position - r.Position).Z)
+		local d = raiz(mejor).Position - r.Position
+		plano = Vector3.new(d.X, 0, d.Z)
 	end
 	plano = plano.Unit
 	local velAtacante = Vector3.new(r.AssemblyLinearVelocity.X, 0, r.AssemblyLinearVelocity.Z).Magnitude
 	local fuerza = C.MANOTAZO_EMPUJE + velAtacante * C.MANOTAZO_EMPUJE_EXTRA_VEL
 	local empuje = plano * fuerza + Vector3.new(0, C.MANOTAZO_EMPUJE_ARRIBA, 0)
 
-	Empujon:FireClient(mejor, empuje)
-	Golpe:FireAllClients(atacante, mejor)
+	if mejor:IsA("Player") then
+		Empujon:FireClient(mejor, empuje)
+	else
+		Bots.empujar(mejor, empuje)
+	end
+	Golpe:FireAllClients(modeloDe(atacante), modeloDe(mejor))
 
 	if faseJugando and modoActual and enJuego[atacante] and enJuego[mejor] then
 		local aviso = modoActual.alGolpear(atacante, mejor)
@@ -271,24 +955,88 @@ Manotazo.OnServerEvent:Connect(function(atacante, vista)
 			ReplicatedStorage:SetAttribute("Mensaje", aviso)
 		end
 	end
+end
+
+Manotazo.OnServerEvent:Connect(golpear)
+
+------------------------------------------------------------------------
+-- Bots
+------------------------------------------------------------------------
+
+Bots.empezar({
+	participantes = participantes,
+	raiz = raiz,
+	esPillador = esPillador,
+	puntos = function()
+		return mapaActual.puntos
+	end,
+	golpear = golpear,
+	activo = function()
+		return faseJugando
+	end,
+})
+
+local function ajustarBots()
+	local reales = #Players:GetPlayers()
+	Bots.ajustar(math.max(0, C.PARTICIPANTES_OBJETIVO - reales), mapaActual.apariciones[1])
+end
+
+Players.PlayerAdded:Connect(ajustarBots)
+Players.PlayerRemoving:Connect(function(p)
+	enJuego[p] = nil
+	ultimoManotazo[p] = nil
+	task.defer(ajustarBots)
 end)
+ajustarBots()
+
+------------------------------------------------------------------------
+-- Caídas y reapariciones
+------------------------------------------------------------------------
+
+local function aparicionAleatoria()
+	local a = mapaActual.apariciones
+	return a[math.random(#a)]
+end
+
+task.spawn(function()
+	while true do
+		for _, p in participantes() do
+			local r = raiz(p)
+			if r and r.Position.Y < mapaActual.alturaMinima then
+				colocar(p, aparicionAleatoria())
+			end
+		end
+		task.wait(0.3)
+	end
+end)
+
+-- quien reaparece (o entra a mitad) va al mapa actual y conserva su marca
+local function alPersonaje(p)
+	task.wait(0.2)
+	colocar(p, aparicionAleatoria())
+	if faseJugando and enJuego[p] then
+		marcar(p, esPillador(p))
+	end
+end
+local function conectar(p)
+	p.CharacterAdded:Connect(function()
+		alPersonaje(p)
+	end)
+	if p.Character then
+		task.spawn(alPersonaje, p)
+	end
+end
+Players.PlayerAdded:Connect(conectar)
+for _, p in Players:GetPlayers() do
+	conectar(p)
+end
 
 ------------------------------------------------------------------------
 -- Rondas
 ------------------------------------------------------------------------
 
-local function listos()
-	local lista = {}
-	for _, p in Players:GetPlayers() do
-		if raiz(p) then
-			table.insert(lista, p)
-		end
-	end
-	return lista
-end
-
-local function anclar(jugadores, anclado)
-	for _, p in jugadores do
+local function anclar(lista, anclado)
+	for _, p in lista do
 		local r = raiz(p)
 		if r then
 			r.Anchored = anclado
@@ -296,343 +1044,88 @@ local function anclar(jugadores, anclado)
 	end
 end
 
-Players.PlayerRemoving:Connect(function(p)
-	enJuego[p] = nil
-	ultimoManotazo[p] = nil
-end)
-
--- si alguien reaparece en mitad de la ronda, conserva su marca
-Players.PlayerAdded:Connect(function(p)
-	p.CharacterAdded:Connect(function()
-		task.wait(0.1)
-		if faseJugando and enJuego[p] then
-			marcar(p, p:GetAttribute("Pillador") == true)
+local function activos()
+	local lista = {}
+	for p in enJuego do
+		if (p:IsA("Player") and p.Parent == Players) or (not p:IsA("Player") and p.Parent) then
+			table.insert(lista, p)
 		end
-	end)
-end)
+	end
+	return lista
+end
 
 ReplicatedStorage:SetAttribute("Modo", C.MODO_INICIAL)
+ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
 
 while true do
-	-- 1. Esperar jugadores
-	while #listos() < C.JUGADORES_MINIMOS do
-		fijarFase("Esperando", 0, "Esperando jugadores (" .. #listos() .. "/" .. C.JUGADORES_MINIMOS .. ")")
+	-- 1. Esperar a que haya gente (con los bots casi siempre la hay)
+	while #participantes() < C.JUGADORES_MINIMOS do
+		fijarFase("Esperando", 0, "Esperando jugadores...")
 		task.wait(1)
 	end
 
-	-- 2. Cuenta atrás
+	-- 2. Siguiente mapa y cuenta atrás
+	indiceMapa = indiceMapa % #mapas + 1
+	mapaActual = mapas[indiceMapa]
+	ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
 	modoActual = Modos[C.MODO_INICIAL] or Modos.Contagio
 	ReplicatedStorage:SetAttribute("Modo", modoActual.nombre)
-	local cancelada = false
+
+	-- todos al mapa nuevo
+	for _, p in participantes() do
+		colocar(p, aparicionAleatoria())
+	end
 	for t = C.PREPARACION, 1, -1 do
-		fijarFase("Preparando", t, modoActual.nombre .. " empieza en " .. t)
+		fijarFase("Preparando", t, mapaActual.nombre .. " · " .. modoActual.nombre .. "\nEmpieza en " .. t)
 		task.wait(1)
-		if #listos() < C.JUGADORES_MINIMOS then
-			cancelada = true
+	end
+
+	-- 3. Empezar
+	local lista = participantes()
+	enJuego = {}
+	local apar = table.clone(mapaActual.apariciones)
+	for i, p in lista do
+		enJuego[p] = true
+		colocar(p, apar[(i - 1) % #apar + 1])
+	end
+	local pilladores, mensaje = modoActual.empezar(lista)
+	faseJugando = true
+
+	-- ventaja: los pilladores esperan quietos unos segundos
+	anclar(pilladores, true)
+	for t = C.VENTAJA_HUIDA, 1, -1 do
+		fijarFase("Jugando", C.DURACION_RONDA, mensaje .. " (sale en " .. t .. ")")
+		task.wait(1)
+	end
+	anclar(pilladores, false)
+	fijarFase("Jugando", C.DURACION_RONDA, "")
+
+	-- 4. Ronda
+	local fin = os.clock() + C.DURACION_RONDA
+	while os.clock() < fin do
+		local a = activos()
+		if #a < C.JUGADORES_MINIMOS or modoActual.terminada(a) then
 			break
 		end
+		ReplicatedStorage:SetAttribute("Tiempo", math.ceil(fin - os.clock()))
+		task.wait(0.25)
 	end
 
-	if not cancelada then
-		-- 3. Empezar: todos reaparecen en el mapa
-		for _, p in Players:GetPlayers() do
-			p:LoadCharacter()
-		end
-		task.wait(0.5)
-		local jugadores = listos()
-		enJuego = {}
-		for _, p in jugadores do
-			enJuego[p] = true
-		end
-
-		local pilladores, mensaje = modoActual.empezar(jugadores)
-		faseJugando = true
-
-		-- ventaja: los pilladores esperan quietos unos segundos
-		anclar(pilladores, true)
-		for t = C.VENTAJA_HUIDA, 1, -1 do
-			fijarFase("Jugando", C.DURACION_RONDA, mensaje .. " (sale en " .. t .. ")")
-			task.wait(1)
-		end
-		anclar(pilladores, false)
-		fijarFase("Jugando", C.DURACION_RONDA, "")
-
-		-- 4. Ronda
-		local fin = os.clock() + C.DURACION_RONDA
-		local porTiempo = true
-		while os.clock() < fin do
-			-- quitar a los que se van
-			local activos = {}
-			for p in enJuego do
-				if p.Parent == Players then
-					table.insert(activos, p)
-				end
-			end
-			if #activos < C.JUGADORES_MINIMOS or modoActual.terminada(activos) then
-				porTiempo = false
-				break
-			end
-			ReplicatedStorage:SetAttribute("Tiempo", math.ceil(fin - os.clock()))
-			task.wait(0.25)
-		end
-
-		-- 5. Resultado
-		faseJugando = false
-		local activos = {}
-		for p in enJuego do
-			if p.Parent == Players then
-				table.insert(activos, p)
-			end
-		end
-		fijarFase("Fin", C.PAUSA_FINAL, modoActual.resultado(activos, porTiempo))
-		task.wait(C.PAUSA_FINAL)
-		for _, p in Players:GetPlayers() do
+	-- 5. Resultado
+	faseJugando = false
+	fijarFase("Fin", C.PAUSA_FINAL, modoActual.resultado(activos()))
+	task.wait(C.PAUSA_FINAL)
+	for _, p in participantes() do
+		quitarMarca(p)
+	end
+	for p in enJuego do
+		if p.Parent then
 			quitarMarca(p)
 		end
-		enJuego = {}
 	end
+	enJuego = {}
 end
-]]></ProtectedString></Properties></Item><Item class="Script" referent="RBX6"><Properties><string name="Name">PistaPruebas</string><ProtectedString name="Source"><![CDATA[-- Construye un mapa de pruebas al pulsar Play: suelo cuadriculado (para notar la
--- velocidad), pista con marcas, rampas, parkour sobre lava, bosque de pilares y una
--- gran bajada para deslizar. Todo se crea en tiempo de ejecución y no se guarda en
--- el sitio; cuando tengas tu mapa de verdad, borra este script.
-
-local Lighting = game:GetService("Lighting")
-
-local mapa = Instance.new("Folder")
-mapa.Name = "PistaPruebas"
-mapa.Parent = workspace
-
--- Lo que trae la plantilla de Roblox estorba: se quita solo durante la prueba.
-local baseplate = workspace:FindFirstChild("Baseplate")
-if baseplate then
-	baseplate:Destroy()
-end
-for _, obj in workspace:GetDescendants() do
-	if obj:IsA("SpawnLocation") then
-		obj.Enabled = false
-	end
-end
-
-Lighting.ClockTime = 14
-Lighting.Brightness = 2
-
-local COLORES = {
-	sueloA = Color3.fromRGB(70, 74, 84),
-	sueloB = Color3.fromRGB(58, 61, 70),
-	marca = Color3.fromRGB(90, 200, 255),
-	rampa = Color3.fromRGB(255, 170, 60),
-	plataforma = Color3.fromRGB(230, 230, 235),
-	lava = Color3.fromRGB(255, 60, 40),
-	pilar = Color3.fromRGB(140, 110, 220),
-	bajada = Color3.fromRGB(90, 210, 140),
-}
-
-local function bloque(props, clase)
-	local p = Instance.new(clase or "Part")
-	p.Anchored = true
-	p.TopSurface = Enum.SurfaceType.Smooth
-	p.BottomSurface = Enum.SurfaceType.Smooth
-	p.Material = Enum.Material.SmoothPlastic
-	for k, v in props do
-		p[k] = v
-	end
-	p.Parent = props.Parent or mapa
-	return p
-end
-
-local function cartel(texto, posicion)
-	local ancla = bloque({ Size = Vector3.one, Position = posicion, Transparency = 1, CanCollide = false, CanQuery = false })
-	local gui = Instance.new("BillboardGui")
-	gui.Size = UDim2.fromOffset(260, 50)
-	gui.MaxDistance = 220
-	gui.Parent = ancla
-	local t = Instance.new("TextLabel")
-	t.Size = UDim2.fromScale(1, 1)
-	t.BackgroundTransparency = 1
-	t.Font = Enum.Font.GothamBold
-	t.TextScaled = true
-	t.TextColor3 = Color3.new(1, 1, 1)
-	t.TextStrokeTransparency = 0.3
-	t.Text = texto
-	t.Parent = gui
-end
-
-------------------------------------------------------------------------
--- Suelo: baldosas de 40 x 40 alternas, 600 x 600, con la cara de arriba en y = 0
-------------------------------------------------------------------------
-
-local TAM = 40
-local N = 15
-for i = 0, N - 1 do
-	for j = 0, N - 1 do
-		bloque({
-			Name = "Suelo",
-			Size = Vector3.new(TAM, 4, TAM),
-			Position = Vector3.new((i - (N - 1) / 2) * TAM, -2, (j - (N - 1) / 2) * TAM),
-			Color = (i + j) % 2 == 0 and COLORES.sueloA or COLORES.sueloB,
-		})
-	end
-end
-
--- Muros de borde para no caerse del mapa
-local borde = N * TAM / 2
-for _, d in { Vector3.xAxis, -Vector3.xAxis, Vector3.zAxis, -Vector3.zAxis } do
-	bloque({
-		Name = "Borde",
-		Size = d.X ~= 0 and Vector3.new(4, 40, N * TAM) or Vector3.new(N * TAM, 40, 4),
-		Position = d * (borde + 2) + Vector3.new(0, 20, 0),
-		Transparency = 0.85,
-		Color = COLORES.marca,
-	})
-end
-
-local spawn = bloque({
-	Name = "Salida",
-	Size = Vector3.new(10, 1, 10),
-	Position = Vector3.new(0, 0.5, 0),
-	Color = COLORES.marca,
-	Material = Enum.Material.Neon,
-}, "SpawnLocation")
-spawn.Duration = 0
-cartel("WASD · Espacio: salto/doble salto · Shift/Q: dash · Ctrl/C: slide", Vector3.new(0, 9, 0))
-
-------------------------------------------------------------------------
--- 1. Pista de velocidad (hacia -Z): marcas cada 20 studs
-------------------------------------------------------------------------
-
-cartel("Pista de velocidad", Vector3.new(0, 8, -50))
-for k = 0, 11 do
-	local z = -60 - k * 20
-	bloque({
-		Name = "Marca",
-		Size = Vector3.new(30, 0.2, 1),
-		Position = Vector3.new(0, 0.1, z),
-		Color = COLORES.marca,
-		Material = Enum.Material.Neon,
-		CanCollide = false,
-	})
-	for _, x in { -18, 18 } do
-		bloque({ Name = "Poste", Size = Vector3.new(2, 10, 2), Position = Vector3.new(x, 5, z), Color = COLORES.pilar })
-	end
-end
-
-------------------------------------------------------------------------
--- 2. Rampas (corre hacia +Z y sube): 3 inclinaciones para lanzarte
-------------------------------------------------------------------------
-
-cartel("Rampas: sube corriendo o deslizando", Vector3.new(0, 10, 75))
-for idx, alto in { 8, 16, 26 } do
-	local x = (idx - 2) * 30
-	bloque({
-		Name = "Rampa",
-		Size = Vector3.new(20, alto, 40),
-		CFrame = CFrame.new(x, alto / 2, 120),
-		Color = COLORES.rampa,
-	}, "WedgePart")
-end
-
-------------------------------------------------------------------------
--- 3. Parkour sobre lava (hacia +Z, en x = -150). Si tocas la lava vuelves al inicio.
-------------------------------------------------------------------------
-
-local PX = -150
-local ALTO = 6
-local LARGO = 16
-local huecos = {
-	{ 10, "Salto" },
-	{ 16, "Salto con carrerilla" },
-	{ 22, "Doble salto" },
-	{ 32, "Dash + doble salto" },
-	{ 44, "Slide + salto + dash + doble" },
-}
-
-local zInicio = -40
-bloque({ Name = "Escalon", Size = Vector3.new(16, 3, 6), Position = Vector3.new(PX, 1.5, zInicio - 3), Color = COLORES.plataforma })
-local inicio = bloque({
-	Name = "PlataformaInicio",
-	Size = Vector3.new(16, ALTO, 30),
-	Position = Vector3.new(PX, ALTO / 2, zInicio + 15),
-	Color = COLORES.plataforma,
-})
-cartel("Parkour sobre lava", inicio.Position + Vector3.new(0, 8, 0))
-local checkpoint = inicio.CFrame + Vector3.new(0, ALTO / 2 + 4, 0)
-
-local z = zInicio + 30
-local zLavaInicio = z
-for _, h in huecos do
-	z += h[1]
-	local p = bloque({
-		Name = "Plataforma",
-		Size = Vector3.new(16, ALTO, LARGO),
-		Position = Vector3.new(PX, ALTO / 2, z + LARGO / 2),
-		Color = COLORES.plataforma,
-	})
-	cartel(("%s (%d)"):format(h[2], h[1]), p.Position + Vector3.new(0, 7, -LARGO / 2 - h[1] / 2))
-	z += LARGO
-end
-
-local lava = bloque({
-	Name = "Lava",
-	Size = Vector3.new(40, 1, z - zLavaInicio),
-	Position = Vector3.new(PX, 0.5, (zLavaInicio + z) / 2),
-	Color = COLORES.lava,
-	Material = Enum.Material.Neon,
-})
-lava.Touched:Connect(function(hit)
-	local char = hit.Parent
-	local root = char and char:FindFirstChild("HumanoidRootPart")
-	if root and char:FindFirstChildOfClass("Humanoid") then
-		root:SetAttribute("Teletransportado", true)
-		root.AssemblyLinearVelocity = Vector3.zero
-		root.CFrame = checkpoint
-	end
-end)
-
-------------------------------------------------------------------------
--- 4. Bosque de pilares para zigzaguear
-------------------------------------------------------------------------
-
-cartel("Bosque de pilares", Vector3.new(200, 10, 40))
-local rng = Random.new(7)
-for _ = 1, 45 do
-	local alto = rng:NextNumber(8, 30)
-	bloque({
-		Name = "Pilar",
-		Size = Vector3.new(4, alto, 4),
-		Position = Vector3.new(rng:NextNumber(140, 270), alto / 2, rng:NextNumber(60, 260)),
-		Color = COLORES.pilar,
-	})
-end
-
-------------------------------------------------------------------------
--- 5. Torre y gran bajada para deslizar (sube por la escalera del este)
-------------------------------------------------------------------------
-
-local TORRE = 40
-bloque({
-	Name = "Torre",
-	Size = Vector3.new(40, TORRE, 20),
-	Position = Vector3.new(170, TORRE / 2, -110),
-	Color = COLORES.bajada,
-})
-bloque({
-	Name = "Bajada",
-	Size = Vector3.new(40, TORRE, 160),
-	CFrame = CFrame.new(170, TORRE / 2, -200),
-	Color = COLORES.bajada,
-}, "WedgePart")
-for i = 1, 13 do
-	local alto = 3 * i
-	bloque({
-		Name = "Escalon",
-		Size = Vector3.new(8, alto, 20),
-		Position = Vector3.new(190 + (13 - i) * 8 + 4, alto / 2, -110),
-		Color = COLORES.plataforma,
-	})
-end
-cartel("Bajada: mantén slide cuesta abajo", Vector3.new(170, TORRE + 8, -110))
-]]></ProtectedString></Properties></Item><Item class="Script" referent="RBX7"><Properties><string name="Name">Validacion</string><ProtectedString name="Source"><![CDATA[-- Validación básica en el servidor. El cliente mueve su personaje (así se siente
+]]></ProtectedString></Properties></Item><Item class="Script" referent="RBX8"><Properties><string name="Name">Validacion</string><ProtectedString name="Source"><![CDATA[-- Validación básica en el servidor. El cliente mueve su personaje (así se siente
 -- instantáneo), y el servidor comprueba que no vaya más rápido de lo posible.
 -- De momento solo avisa en la consola; en PvP aquí se devolvería al jugador a su
 -- última posición válida.
@@ -689,10 +1182,14 @@ while true do
 		end
 	end
 end
-]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX13"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX12"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX9"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona (viewmodel).
--- Dos brazos con el color de piel y la ropa del personaje, pegados a la cámara.
--- Se balancean al andar, se retrasan al girar la vista y reaccionan al dash,
--- al slide, al salto y al aterrizaje. Lee el estado que publica Movimiento.client.lua.
+]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX14"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX13"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX10"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona: los brazos de verdad de tu avatar de Roblox
+-- (con tu piel, tu camiseta y tus accesorios de brazo).
+--
+-- En primera persona Roblox esconde el cuerpo. Aquí volvemos visibles solo los brazos
+-- y giramos los hombros para que apunten hacia delante, siguiendo la cámara.
+-- Reaccionan al movimiento (lee el estado que publica Movimiento.client.lua):
+-- balanceo al correr, retraso al girar, slide, dash, salto, aterrizaje, pared y manotazo.
+-- Funciona con avatares R15 y R6.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -701,8 +1198,7 @@ local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
-local modelo -- Model con los brazos
-local brazos = {} -- { lado = 1/-1, raiz = Part }
+local brazos = {} -- { lado, hombro (Motor6D), codo (Motor6D o nil), partes = {BasePart} }
 
 local estado = {
 	tiempo = 0,
@@ -715,106 +1211,94 @@ local estado = {
 	estabaEnSuelo = true,
 	ultimoSalto = -math.huge,
 	salto = 0,
-	ultimoManotazo = -math.huge,
+	pared = 0,
 }
 
-local function crearParte(nombre, tam, color, material)
-	local p = Instance.new("Part")
-	p.Name = nombre
-	p.Size = tam
-	p.Color = color
-	p.Material = material or Enum.Material.SmoothPlastic
-	p.Anchored = true
-	p.CanCollide = false
-	p.CanQuery = false
-	p.CanTouch = false
-	p.CastShadow = false
-	p.TopSurface = Enum.SurfaceType.Smooth
-	p.BottomSurface = Enum.SurfaceType.Smooth
-	return p
+local NOMBRES = {
+	R15 = {
+		[1] = { hombro = "RightShoulder", codo = "RightElbow", partes = { "RightUpperArm", "RightLowerArm", "RightHand" } },
+		[-1] = { hombro = "LeftShoulder", codo = "LeftElbow", partes = { "LeftUpperArm", "LeftLowerArm", "LeftHand" } },
+	},
+	R6 = {
+		[1] = { hombro = "Right Shoulder", partes = { "Right Arm" } },
+		[-1] = { hombro = "Left Shoulder", partes = { "Left Arm" } },
+	},
+}
+
+local function buscarMotor(char, nombre)
+	for _, d in char:GetDescendants() do
+		if d:IsA("Motor6D") and d.Name == nombre then
+			return d
+		end
+	end
+	return nil
 end
 
-local function redondear(p)
-	-- malla simple (se puede cambiar por una malla redondeada más adelante)
-	local m = Instance.new("SpecialMesh")
-	m.MeshType = Enum.MeshType.Brick
-	m.Parent = p
-	return p
-end
-
-local function coloresDelPersonaje(char)
-	local piel = Color3.fromRGB(234, 184, 146)
-	local manga = Color3.fromRGB(45, 60, 90)
-	local bc = char:FindFirstChildOfClass("BodyColors")
-	if bc then
-		piel = bc.LeftArmColor3
-	end
-	local brazo = char:FindFirstChild("LeftHand") or char:FindFirstChild("Left Arm")
-	if brazo and not bc then
-		piel = brazo.Color
-	end
-	local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-	if torso then
-		manga = torso.Color
-	end
-	return piel, manga
-end
-
-local function construir(char)
-	if modelo then
-		modelo:Destroy()
-	end
+local function prepararPersonaje(char)
 	brazos = {}
-	modelo = Instance.new("Model")
-	modelo.Name = "BrazosVista"
-
-	local piel, manga = coloresDelPersonaje(char)
-
-	for _, lado in { -1, 1 } do
-		local raiz = crearParte("Raiz", Vector3.new(0.05, 0.05, 0.05), piel)
-		raiz.Transparency = 1
-		raiz.Parent = modelo
-
-		-- antebrazo con manga, apuntando hacia delante (eje -Z de la cámara)
-		local antebrazo = redondear(crearParte("Antebrazo", Vector3.new(0.32, 0.32, 1.25), manga))
-		antebrazo.Parent = modelo
-		local puno = redondear(crearParte("Puno", Vector3.new(0.36, 0.36, 0.12), manga:Lerp(Color3.new(0, 0, 0), 0.25)))
-		puno.Parent = modelo
-		local mano = redondear(crearParte("Mano", Vector3.new(0.3, 0.26, 0.34), piel))
-		mano.Parent = modelo
-		local pulgar = redondear(crearParte("Pulgar", Vector3.new(0.1, 0.1, 0.18), piel))
-		pulgar.Parent = modelo
-
-		table.insert(brazos, {
-			lado = lado,
-			piezas = {
-				{ parte = antebrazo, off = CFrame.new(0, 0, 0) },
-				{ parte = puno, off = CFrame.new(0, 0, -0.62) },
-				{ parte = mano, off = CFrame.new(0, -0.01, -0.84) },
-				{ parte = pulgar, off = CFrame.new(-0.17 * lado, 0.06, -0.78) },
-			},
-		})
+	local hum = char:WaitForChild("Humanoid")
+	local tipo = hum.RigType == Enum.HumanoidRigType.R15 and "R15" or "R6"
+	-- esperar a que el avatar termine de cargar
+	for _ = 1, 50 do
+		if buscarMotor(char, NOMBRES[tipo][1].hombro) then
+			break
+		end
+		task.wait(0.1)
 	end
-
-	modelo.Parent = camera
+	for _, lado in { 1, -1 } do
+		local n = NOMBRES[tipo][lado]
+		local hombro = buscarMotor(char, n.hombro)
+		if hombro then
+			local partes = {}
+			for _, nombre in n.partes do
+				local p = char:FindFirstChild(nombre)
+				if p then
+					table.insert(partes, p)
+				end
+			end
+			table.insert(brazos, {
+				lado = lado,
+				hombro = hombro,
+				codo = n.codo and buscarMotor(char, n.codo) or nil,
+				partes = partes,
+			})
+		end
+	end
 end
 
 local function lerp(a, b, t)
 	return a + (b - a) * t
 end
 
-local function actualizar(dt)
-	if not modelo or not modelo.Parent then
+-- Gira el hombro para que el brazo (que cuelga hacia -Y) apunte en "direccion" (mundo).
+local function apuntarHombro(motor, direccion, giroMuneca)
+	local p0 = motor.Part0
+	if not p0 then
 		return
 	end
+	local junta = p0.CFrame * motor.C0 -- marco del hombro en el mundo, sin animación
+	local abajo = -direccion.Unit -- el +Y del brazo debe mirar al lado contrario
+	local lateral = camera.CFrame.RightVector
+	lateral = (lateral - abajo * lateral:Dot(abajo))
+	if lateral.Magnitude < 0.01 then
+		return
+	end
+	lateral = lateral.Unit
+	local atras = lateral:Cross(abajo)
+	local objetivo = CFrame.fromMatrix(Vector3.zero, lateral, abajo, atras) * CFrame.Angles(0, giroMuneca or 0, 0)
+	local rotJunta = junta - junta.Position
+	motor.Transform = rotJunta:Inverse() * objetivo
+end
+
+local function actualizar(dt)
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	local vivo = hum and hum.Health > 0
-	-- solo en primera persona
-	local primera = char and char:FindFirstChild("Head")
-		and (camera.CFrame.Position - char.Head.Position).Magnitude < 1.5
-	modelo.Parent = (vivo and primera) and camera or nil
-	if not (vivo and primera) then
+	local cabeza = char and char:FindFirstChild("Head")
+	if not (hum and hum.Health > 0 and cabeza and #brazos > 0) then
+		return
+	end
+	local primera = (camera.CFrame.Position - cabeza.Position).Magnitude < 2
+	if not primera then
 		return
 	end
 
@@ -823,104 +1307,97 @@ local function actualizar(dt)
 	local enDash = player:GetAttribute("MovDash") == true
 	local enSuelo = player:GetAttribute("MovSuelo") ~= false
 	local ultimoSalto = player:GetAttribute("MovUltimoSalto") or -math.huge
+	local pared = player:GetAttribute("MovPared") or 0
 
 	local k = math.min(dt * 12, 1)
 	estado.tiempo += dt
 
-	-- balanceo al andar (más rápido y amplio con la velocidad)
-	local andar = enSuelo and not enSlide and math.clamp(vel / 16, 0, 1.6) or 0
-	estado.bob += dt * (6 + vel * 0.35) * (andar > 0.05 and 1 or 0)
-	local bobAmp = lerp(0, 1, math.min(andar, 1))
+	local andar = (enSuelo and not enSlide) and math.clamp(vel / 16, 0, 1) or 0
+	estado.bob += dt * (5 + vel * 0.3) * (andar > 0.05 and 1 or 0)
 
-	-- retraso al girar la vista
 	local delta = UserInputService:GetMouseDelta()
-	local objetivoSway = Vector2.new(math.clamp(-delta.X * 0.004, -0.15, 0.15), math.clamp(delta.Y * 0.004, -0.15, 0.15))
+	local objetivoSway = Vector2.new(math.clamp(-delta.X * 0.006, -0.25, 0.25), math.clamp(delta.Y * 0.006, -0.25, 0.25))
 	estado.sway = estado.sway:Lerp(objetivoSway, math.min(dt * 8, 1))
 
 	estado.slide = lerp(estado.slide, enSlide and 1 or 0, k)
 	estado.dash = lerp(estado.dash, enDash and 1 or 0, math.min(dt * 18, 1))
 	estado.aire = lerp(estado.aire, enSuelo and 0 or 1, math.min(dt * 6, 1))
+	estado.pared = lerp(estado.pared, pared, k)
 
 	if ultimoSalto ~= estado.ultimoSalto then
 		estado.ultimoSalto = ultimoSalto
 		estado.salto = 1
 	end
 	estado.salto = lerp(estado.salto, 0, math.min(dt * 5, 1))
-
 	if enSuelo and not estado.estabaEnSuelo then
 		estado.aterrizaje = 1
 	end
 	estado.estabaEnSuelo = enSuelo
 	estado.aterrizaje = lerp(estado.aterrizaje, 0, math.min(dt * 9, 1))
 
-	-- manotazo: el brazo derecho sale disparado y vuelve (0 → 1 → 0 en ~0,3 s)
 	local tm = os.clock() - (player:GetAttribute("MovManotazo") or -math.huge)
 	local golpe = 0
 	if tm < 0.08 then
 		golpe = tm / 0.08
 	elseif tm < 0.32 then
-		golpe = 1 - (tm - 0.08) / 0.24
-		golpe = golpe * golpe
+		golpe = (1 - (tm - 0.08) / 0.24) ^ 2
 	end
 
-	local respira = math.sin(estado.tiempo * 1.6) * 0.012
-
+	local cam = camera.CFrame
 	for _, b in brazos do
 		local l = b.lado
 		local fase = estado.bob + (l == 1 and math.pi or 0)
-		local bobX = math.cos(fase) * 0.05 * bobAmp
-		local bobY = math.abs(math.sin(fase)) * 0.07 * bobAmp
 
-		-- posición de reposo: abajo a cada lado, un poco hacia dentro
-		local pos = Vector3.new(0.85 * l, -0.85, -1.15)
-		local rot = CFrame.Angles(math.rad(8), math.rad(-10 * l), math.rad(-6 * l))
-
-		pos += Vector3.new(bobX, -bobY + respira, 0)
-		pos += Vector3.new(estado.sway.X, estado.sway.Y, 0)
-
-		-- slide: los brazos se abren y bajan para equilibrarse
-		pos += Vector3.new(0.35 * l, -0.15, 0.25) * estado.slide
-		rot *= CFrame.Angles(math.rad(-20) * estado.slide, 0, math.rad(-25 * l) * estado.slide)
-
-		-- dash: los brazos se van hacia atrás
-		pos += Vector3.new(0.1 * l, -0.35, 0.7) * estado.dash
-		rot *= CFrame.Angles(math.rad(35) * estado.dash, 0, 0)
-
-		-- en el aire: suben un poco; al saltar, impulso hacia arriba
-		pos += Vector3.new(0.05 * l, 0.1, 0) * estado.aire + Vector3.new(0, 0.25, 0) * estado.salto
-		rot *= CFrame.Angles(math.rad(-15) * estado.salto, 0, 0)
-
-		-- manotazo con la mano derecha, abierta y de lado
-		if l == 1 and golpe > 0 then
-			pos += Vector3.new(-0.75, 0.55, -0.9) * golpe
-			rot *= CFrame.Angles(math.rad(-10) * golpe, math.rad(25) * golpe, math.rad(80) * golpe)
-		elseif l == -1 then
-			pos += Vector3.new(0, -0.1, 0.15) * golpe -- el otro brazo se recoge
+		-- Dirección del brazo en coordenadas de la cámara (x derecha, y arriba, z atrás)
+		local d = Vector3.new(0.12 * l, -0.42, -1)
+		d += Vector3.new(math.cos(fase) * 0.06, math.abs(math.sin(fase)) * -0.08, 0) * andar
+		d += Vector3.new(estado.sway.X, estado.sway.Y, 0)
+		d += Vector3.new(0.5 * l, -0.2, 0.3) * estado.slide -- se abren para equilibrarse
+		d += Vector3.new(0.15 * l, -0.5, 0.6) * estado.dash -- hacia atrás
+		d += Vector3.new(0.1 * l, 0.25, 0) * estado.aire + Vector3.new(0, 0.35, 0) * estado.salto
+		d += Vector3.new(0, -0.3, 0) * estado.aterrizaje
+		-- en la pared, la mano de ese lado la toca
+		if (estado.pared > 0.1 and l == 1) or (estado.pared < -0.1 and l == -1) then
+			d += Vector3.new(0.9 * l, 0.45, 0.2) * math.abs(estado.pared)
+		end
+		-- manotazo con la derecha, cruzando hacia el centro
+		if l == 1 then
+			d += Vector3.new(-0.35, 0.5, -0.4) * golpe
+		else
+			d += Vector3.new(0, -0.2, 0.3) * golpe
 		end
 
-		-- aterrizaje: bajan de golpe
-		pos += Vector3.new(0, -0.22, 0) * estado.aterrizaje
-
-		local base = camera.CFrame * CFrame.new(pos) * rot
-		for _, pieza in b.piezas do
-			pieza.parte.CFrame = base * pieza.off
+		local mundo = cam:VectorToWorldSpace(d)
+		apuntarHombro(b.hombro, mundo, l == 1 and golpe * math.rad(70) or 0)
+		if b.codo then
+			-- codo un poco doblado; se estira al dar el manotazo
+			local doblez = math.rad(lerp(25, 5, golpe))
+			b.codo.Transform = CFrame.Angles(doblez, 0, 0)
+		end
+		for _, p in b.partes do
+			p.LocalTransparencyModifier = 0
+		end
+		-- accesorios pegados a los brazos (relojes, mangas, etc.)
+		for _, acc in char:GetChildren() do
+			if acc:IsA("Accessory") then
+				local h = acc:FindFirstChild("Handle")
+				local w = h and h:FindFirstChildWhichIsA("Weld")
+				if w and table.find(b.partes, w.Part1) then
+					h.LocalTransparencyModifier = 0
+				end
+			end
 		end
 	end
 end
 
-local function alAparecer(char)
-	char:WaitForChild("Humanoid")
-	task.wait(0.2) -- espera a que carguen los colores
-	construir(char)
-end
-
-player.CharacterAdded:Connect(alAparecer)
+player.CharacterAdded:Connect(prepararPersonaje)
 if player.Character then
-	task.spawn(alAparecer, player.Character)
+	task.spawn(prepararPersonaje, player.Character)
 end
 
+-- después de la cámara (que vuelve a esconder el cuerpo) y de las animaciones
 RunService:BindToRenderStep("BrazosVista", Enum.RenderPriority.Camera.Value + 2, actualizar)
-]]></ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX10"><Properties><string name="Name">Movimiento</string><ProtectedString name="Source"><![CDATA[-- Controlador de movimiento en primera persona: dash, slide, doble salto,
+]]></ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX11"><Properties><string name="Name">Movimiento</string><ProtectedString name="Source"><![CDATA[-- Controlador de movimiento en primera persona: dash, slide, doble salto,
 -- coyote time, buffer de salto y bunny-hop. Va en StarterPlayerScripts.
 --
 -- Idea: el Humanoid sigue encargándose de la gravedad, las colisiones y el suelo,
@@ -979,6 +1456,11 @@ local function resetState()
 	s.roll = 0
 	s.speed = 0
 
+	s.wallrun = nil -- { normal, lado, hasta }
+	s.wallrunLado = 0
+	s.ultimaPared = nil -- normal de la última pared (no se puede volver a la misma sin tocar suelo)
+	s.wallrunBloqueadoHasta = -math.huge
+
 	s.empujePendiente = nil
 	s.empujeHasta = -math.huge
 end
@@ -1036,6 +1518,19 @@ local function groundHit()
 	return workspace:Raycast(root.Position, Vector3.new(0, -reach, 0), rayParams)
 end
 
+-- Busca una pared a la izquierda o a la derecha según hacia dónde vas.
+-- Devuelve normal, lado (-1 izquierda, 1 derecha) o nil.
+local function buscarPared(adelante)
+	local derecha = adelante:Cross(Vector3.yAxis)
+	for _, lado in { 1, -1 } do
+		local hit = workspace:Raycast(root.Position, derecha * lado * C.WALLRUN_DISTANCIA, rayParams)
+		if hit and math.abs(hit.Normal.Y) < 0.3 then
+			return hit.Normal, lado
+		end
+	end
+	return nil
+end
+
 local function wishDirection()
 	local move = controls:GetMoveVector() -- x = derecha, z = -adelante (teclado, mando y táctil)
 	if move.Magnitude < 0.01 then
@@ -1071,6 +1566,8 @@ local function step(dt)
 		end
 		s.lastGroundedAt = now
 		s.airJumpsLeft = C.AIR_JUMPS
+		s.wallrun = nil
+		s.ultimaPared = nil
 	else
 		s.lastAirVelY = vy
 	end
@@ -1086,7 +1583,17 @@ local function step(dt)
 	-- Salto (con coyote time, buffer y doble salto)
 	if now - s.jumpBufferedAt <= C.JUMP_BUFFER then
 		local jumped = false
-		if grounded or now - s.lastGroundedAt <= C.COYOTE_TIME then
+		if s.wallrun then
+			-- salto de pared: hacia fuera y arriba, recupera el doble salto
+			local n = s.wallrun.normal
+			horiz = flat(horiz - n * horiz:Dot(n)) + n * C.WALLRUN_SALTO_FUERA
+			vy = C.WALLRUN_SALTO_ARRIBA
+			s.ultimaPared = n
+			s.wallrun = nil
+			s.wallrunBloqueadoHasta = now + 0.25
+			s.airJumpsLeft = C.AIR_JUMPS
+			jumped = true
+		elseif grounded or now - s.lastGroundedAt <= C.COYOTE_TIME then
 			vy = C.JUMP_VELOCITY
 			jumped = true
 		elseif s.airJumpsLeft > 0 then
@@ -1176,9 +1683,47 @@ local function step(dt)
 			horiz = accelerate(horiz, wish, C.WALK_SPEED, C.GROUND_ACCEL, dt)
 		end
 	else
-		horiz = accelerate(horiz, wish, C.AIR_WISH_CAP, C.AIR_ACCEL, dt)
-		horiz = steer(horiz, wish, C.AIR_STEER, dt)
+		-- ¿Empezar a correr por la pared? (en el aire, rápido y empujando hacia delante)
+		if not s.wallrun and now > s.wallrunBloqueadoHasta and horiz.Magnitude >= C.WALLRUN_VEL_MIN
+			and wish.Magnitude > 0 and wish:Dot(horiz.Unit) > 0.3 then
+			local n, lado = buscarPared(horiz.Unit)
+			if n and not (s.ultimaPared and s.ultimaPared:Dot(n) > 0.7) then
+				s.wallrun = { normal = n, lado = lado, hasta = now + C.WALLRUN_DURACION }
+				s.airJumpsLeft = C.AIR_JUMPS
+				vy = math.max(vy, C.WALLRUN_SUBIDA_INICIAL)
+				setY = true
+			end
+		end
+
+		if s.wallrun then
+			local w = s.wallrun
+			local adelante = horiz.Magnitude > 0.1 and horiz.Unit or flat(camera.CFrame.LookVector).Unit
+			local n, lado = buscarPared(adelante)
+			local sigue = n and n:Dot(w.normal) > 0.8 and now < w.hasta
+				and wish.Magnitude > 0 and horiz.Magnitude >= C.WALLRUN_VEL_MIN * 0.6
+			if sigue then
+				w.normal, w.lado = n, lado
+				local tangente = flat(adelante - n * adelante:Dot(n))
+				tangente = tangente.Magnitude > 0.01 and tangente.Unit or adelante
+				local rapidez = math.max(horiz.Magnitude, C.WALLRUN_VEL_MIN)
+				horiz = tangente * rapidez - n * 2 -- un poco hacia la pared para no despegarse
+				vy = math.max(vy - C.WALLRUN_GRAVEDAD * dt, -C.WALLRUN_CAIDA_MAX)
+				setY = true
+			else
+				s.ultimaPared = w.normal
+				s.wallrun = nil
+			end
+		end
+
+		if not s.wallrun then
+			horiz = accelerate(horiz, wish, C.AIR_WISH_CAP, C.AIR_ACCEL, dt)
+			horiz = steer(horiz, wish, C.AIR_STEER, dt)
+		end
 	end
+	if s.dashing or grounded then
+		s.wallrun = nil
+	end
+	s.wallrunLado = s.wallrun and s.wallrun.lado or 0
 
 	if horiz.Magnitude > C.MAX_SPEED and now > s.empujeHasta then
 		horiz = horiz.Unit * C.MAX_SPEED
@@ -1196,6 +1741,7 @@ local function step(dt)
 	player:SetAttribute("MovDash", s.dashing)
 	player:SetAttribute("MovSuelo", grounded)
 	player:SetAttribute("MovUltimoSalto", s.lastJumpAt)
+	player:SetAttribute("MovPared", s.wallrunLado)
 end
 
 ------------------------------------------------------------------------
@@ -1215,6 +1761,8 @@ local function cameraStep(dt)
 	if s.sliding then
 		targetRoll += 2
 	end
+	-- corriendo por la pared la cámara se inclina hacia fuera
+	targetRoll += s.wallrunLado * C.WALLRUN_INCLINACION
 	s.roll += (targetRoll - s.roll) * math.min(dt * 10, 1)
 	camera.CFrame *= CFrame.Angles(0, 0, math.rad(s.roll))
 
@@ -1359,7 +1907,7 @@ RunService:BindToRenderStep("MovimientoCamara", Enum.RenderPriority.Camera.Value
 	cameraStep(dt)
 	hudStep()
 end)
-]]></ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX11"><Properties><string name="Name">Partida</string><ProtectedString name="Source"><![CDATA[-- Cliente de la partida: botón de manotazo, HUD de la ronda y efectos al golpear.
+]]></ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX12"><Properties><string name="Name">Partida</string><ProtectedString name="Source"><![CDATA[-- Cliente de la partida: botón de manotazo, HUD de la ronda y efectos al golpear.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -1445,7 +1993,7 @@ local modo = texto({
 local mensaje = texto({
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.3),
-	Size = UDim2.new(0.9, 0, 0, 50),
+	Size = UDim2.new(0.9, 0, 0, 90),
 	TextSize = 30,
 	TextWrapped = true,
 })
@@ -1480,7 +2028,9 @@ RunService.RenderStepped:Connect(function()
 	local m = ReplicatedStorage:GetAttribute("Mensaje") or ""
 
 	reloj.Text = fase == "Jugando" and formatoTiempo(t) or ""
-	modo.Text = fase == "Jugando" and string.upper(ReplicatedStorage:GetAttribute("Modo") or "") or ""
+	modo.Text = fase == "Jugando"
+			and string.upper((ReplicatedStorage:GetAttribute("Modo") or "") .. " · " .. (ReplicatedStorage:GetAttribute("Mapa") or ""))
+		or ""
 
 	if m ~= ultimoMensaje then
 		ultimoMensaje = m
@@ -1527,8 +2077,8 @@ local function sonido(id, volumen, tono, parent)
 end
 
 Golpe.OnClientEvent:Connect(function(atacante, golpeado)
-	local char = golpeado and golpeado.Character
-	local r = char and char:FindFirstChild("HumanoidRootPart")
+	-- atacante y golpeado son modelos (personajes de jugadores o bots)
+	local r = golpeado and golpeado:FindFirstChild("HumanoidRootPart")
 	if r then
 		-- chispazo
 		local a = Instance.new("Attachment")
@@ -1548,7 +2098,7 @@ Golpe.OnClientEvent:Connect(function(atacante, golpeado)
 			a:Destroy()
 		end)
 	end
-	if golpeado == player then
+	if golpeado ~= nil and golpeado == player.Character then
 		-- sacudida de cámara al recibir
 		local inicio = os.clock()
 		local con

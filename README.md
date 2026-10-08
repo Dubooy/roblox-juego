@@ -12,6 +12,8 @@ salto y bunny-hop, más un mapa de pruebas que se construye solo al pulsar **Pla
 | Dash (3 cargas) | Shift izq. o Q | L1 o X | botón "Dash" |
 | Slide (mantener) | Ctrl izq. o C | B | botón "Slide" |
 | Manotazo (empuja) | clic izquierdo o E | R2 | botón "Manotazo" |
+| Correr por la pared | salta hacia una pared en paralelo, rápido, y mantén W | | |
+| Salto de pared | Espacio mientras corres por la pared | A | botón de salto |
 
 Abajo en pantalla ves la velocidad y las cargas de dash.
 
@@ -28,10 +30,11 @@ manotazo pasa a pillar. Si al acabar el tiempo queda alguien sin pillar, ganan l
 Los pilladores se ven en rojo y los que huyen en azul, incluso a través de las paredes.
 El modo "Corona robada" llegará con el lobby, donde se elegirá el modo.
 
-## Probar con varios jugadores
-Abre `MovimientoFPS.rbxlx` en Studio → pestaña **Probar** → en **Clientes y servidores** elige
-**3 jugadores** → **Iniciar**. Se abre una ventana por jugador. Si cambias algo en `src/`,
-regenera el archivo con `python3 herramientas/crear_rbxlx.py`.
+## Probar
+Abre `MovimientoFPS.rbxlx` en Studio y pulsa **Play**. Hay bots que rellenan la partida hasta 6
+participantes, así que se puede jugar solo. Los mapas se alternan cada ronda:
+**Parque de calistenia** y **Torre de obras**. Si cambias algo en `src/`, regenera el archivo con
+`python3 herramientas/crear_rbxlx.py`.
 
 ## Cómo meterlo en Roblox Studio
 
@@ -60,7 +63,10 @@ slide, FOV, etc. Cambia un número, vuelve a pulsar Play y compara.
   `LinearVelocity` solo en X y Z. Por eso se conserva el impulso.
 - `Validacion.server.lua`: comprueba en el servidor que nadie supere la velocidad máxima
   posible. Por ahora solo avisa en la consola; servirá de base para el PvP.
-- `PistaPruebas.server.lua`: el mapa de pruebas. Bórralo cuando tengas un mapa de verdad.
+- `Mapas.lua`: construye por código el parque de calistenia y la torre de obras.
+- `Bots.lua`: bots que persiguen o huyen con pathfinding y dan manotazos.
+- `Partida.server.lua`: manotazo, rondas, modos y mapas.
+- `Brazos.client.lua`: tus brazos de verdad visibles en primera persona.
 
 ## Siguientes pasos
 1. Wall-run y salto en pared.

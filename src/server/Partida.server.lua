@@ -1,20 +1,24 @@
--- Partida: manotazo (con empujón) y rondas de pilla-pilla.
+-- Partida: manotazo (con empujón), bots y rondas de pilla-pilla en dos mapas.
 --
--- Modos previstos: "Contagio" y "CoronaRobada". Se elegirán en un lobby más
--- adelante; de momento se juega siempre C.MODO_INICIAL. Cada modo es una tabla
--- con empezar / alGolpear / terminada / resultado, así añadir uno nuevo no toca el resto.
+-- "Participante" = un Player o un bot (Model). Los dos guardan su equipo en el
+-- atributo "Pillador" y se marcan con un Highlight rojo (pilla) o azul (huye).
 --
--- Estado público (lo leen los clientes para el HUD):
---   ReplicatedStorage:GetAttribute("Fase")    "Esperando" | "Preparando" | "Jugando" | "Fin"
---   ReplicatedStorage:GetAttribute("Modo")    nombre del modo
---   ReplicatedStorage:GetAttribute("Tiempo")  segundos que quedan de la fase
---   ReplicatedStorage:GetAttribute("Mensaje") texto grande en pantalla
---   player:GetAttribute("Pillador")           true si pilla
+-- Modos previstos: "Contagio" y "CoronaRobada". Se elegirán en el lobby más
+-- adelante; de momento se juega siempre C.MODO_INICIAL. Los mapas se van alternando.
+--
+-- Estado público para el HUD (atributos de ReplicatedStorage):
+--   Fase "Esperando" | "Preparando" | "Jugando" | "Fin", Modo, Mapa, Tiempo, Mensaje
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Mapas = require(script.Parent:WaitForChild("Mapas"))
+local Bots = require(script.Parent:WaitForChild("Bots"))
+
+local mapas = Mapas.construir()
+local mapaActual = mapas[1]
+local indiceMapa = 0
 
 ------------------------------------------------------------------------
 -- Remotos
@@ -31,58 +35,100 @@ local function remoto(nombre)
 	return r
 end
 
-local Manotazo = remoto("Manotazo") -- cliente → servidor: "he dado un manotazo" (dirección de la vista)
+local Manotazo = remoto("Manotazo") -- cliente → servidor: dirección de la vista
 local Empujon = remoto("Empujon") -- servidor → golpeado: vector de empujón
-local Golpe = remoto("Golpe") -- servidor → todos: (atacante, golpeado) para efectos
+local Golpe = remoto("Golpe") -- servidor → todos: (modelo atacante, modelo golpeado) para efectos
 
 ------------------------------------------------------------------------
--- Utilidades
+-- Participantes (jugadores y bots)
 ------------------------------------------------------------------------
 
-local function raiz(player)
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
+local function modeloDe(p)
+	if p:IsA("Player") then
+		return p.Character
+	end
+	return p
+end
+
+local function nombreDe(p)
+	if p:IsA("Player") then
+		return p.DisplayName
+	end
+	return p:GetAttribute("NombreVisible") or p.Name
+end
+
+local function raiz(p)
+	local m = modeloDe(p)
+	local hum = m and m:FindFirstChildOfClass("Humanoid")
 	if not (hum and hum.Health > 0) then
 		return nil
 	end
-	return char:FindFirstChild("HumanoidRootPart")
+	return m:FindFirstChild("HumanoidRootPart")
+end
+
+local function participantes()
+	local lista = {}
+	for _, p in Players:GetPlayers() do
+		if raiz(p) then
+			table.insert(lista, p)
+		end
+	end
+	for _, b in Bots.lista() do
+		table.insert(lista, b)
+	end
+	return lista
+end
+
+local function esPillador(p)
+	return p:GetAttribute("Pillador") == true
+end
+
+local function colocar(p, posicion)
+	local m = modeloDe(p)
+	if m then
+		m:PivotTo(CFrame.new(posicion) * CFrame.Angles(0, math.random() * math.pi * 2, 0))
+		local r = m:FindFirstChild("HumanoidRootPart")
+		if r then
+			r.AssemblyLinearVelocity = Vector3.zero
+			r:SetAttribute("Teletransportado", true) -- que el anti-trampas no lo cuente
+		end
+	end
+end
+
+local COLOR_PILLADOR = Color3.fromRGB(255, 70, 70)
+local COLOR_HUYE = Color3.fromRGB(80, 200, 255)
+
+local function marcar(p, pillador)
+	p:SetAttribute("Pillador", pillador)
+	local m = modeloDe(p)
+	if not m then
+		return
+	end
+	local h = m:FindFirstChild("MarcaEquipo")
+	if not h then
+		h = Instance.new("Highlight")
+		h.Name = "MarcaEquipo"
+		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- se ve a través de las paredes
+		h.FillTransparency = 0.75
+		h.Parent = m
+	end
+	h.FillColor = pillador and COLOR_PILLADOR or COLOR_HUYE
+	h.OutlineColor = h.FillColor
+end
+
+local function quitarMarca(p)
+	p:SetAttribute("Pillador", nil)
+	local m = modeloDe(p)
+	local h = m and m:FindFirstChild("MarcaEquipo")
+	if h then
+		h:Destroy()
+	end
 end
 
 local function fijarFase(fase, tiempo, mensaje)
 	ReplicatedStorage:SetAttribute("Fase", fase)
 	ReplicatedStorage:SetAttribute("Tiempo", tiempo or 0)
 	ReplicatedStorage:SetAttribute("Mensaje", mensaje or "")
-end
-
-local COLOR_PILLADOR = Color3.fromRGB(255, 70, 70)
-local COLOR_HUYE = Color3.fromRGB(80, 200, 255)
-
-local function marcar(player, pillador)
-	player:SetAttribute("Pillador", pillador)
-	local char = player.Character
-	if not char then
-		return
-	end
-	local h = char:FindFirstChild("MarcaEquipo")
-	if not h then
-		h = Instance.new("Highlight")
-		h.Name = "MarcaEquipo"
-		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- se ve a través de las paredes
-		h.FillTransparency = 0.75
-		h.Parent = char
-	end
-	h.FillColor = pillador and COLOR_PILLADOR or COLOR_HUYE
-	h.OutlineColor = h.FillColor
-	h.Enabled = true
-end
-
-local function quitarMarca(player)
-	player:SetAttribute("Pillador", nil)
-	local char = player.Character
-	local h = char and char:FindFirstChild("MarcaEquipo")
-	if h then
-		h:Destroy()
-	end
 end
 
 ------------------------------------------------------------------------
@@ -92,36 +138,35 @@ end
 local Modos = {}
 
 -- Contagio: uno empieza pillando; cada uno que toca pasa a pillar.
--- Ganan los que huyen si queda alguno al acabar el tiempo.
 Modos.Contagio = {
 	nombre = "Contagio",
-	empezar = function(jugadores)
-		local primero = jugadores[math.random(#jugadores)]
-		for _, p in jugadores do
+	empezar = function(lista)
+		local primero = lista[math.random(#lista)]
+		for _, p in lista do
 			marcar(p, p == primero)
 		end
-		return { primero }, primero.DisplayName .. " pilla. ¡Corred!"
+		return { primero }, nombreDe(primero) .. " pilla. ¡Corred!"
 	end,
 	alGolpear = function(atacante, golpeado)
-		if atacante:GetAttribute("Pillador") and not golpeado:GetAttribute("Pillador") then
+		if esPillador(atacante) and not esPillador(golpeado) then
 			marcar(golpeado, true)
-			return golpeado.DisplayName .. " ha sido pillado"
+			return nombreDe(golpeado) .. " ha sido pillado"
 		end
 		return nil
 	end,
-	terminada = function(jugadores)
-		for _, p in jugadores do
-			if not p:GetAttribute("Pillador") then
+	terminada = function(lista)
+		for _, p in lista do
+			if not esPillador(p) then
 				return false
 			end
 		end
 		return true
 	end,
-	resultado = function(jugadores, porTiempo)
+	resultado = function(lista)
 		local libres = {}
-		for _, p in jugadores do
-			if not p:GetAttribute("Pillador") then
-				table.insert(libres, p.DisplayName)
+		for _, p in lista do
+			if not esPillador(p) then
+				table.insert(libres, nombreDe(p))
 			end
 		end
 		if #libres == 0 then
@@ -137,17 +182,16 @@ Modos.Contagio = {
 -- Manotazo
 ------------------------------------------------------------------------
 
-local ultimoManotazo = {} -- [player] = os.clock()
-local enJuego = {} -- [player] = true durante la ronda
+local ultimoManotazo = {} -- [participante] = os.clock()
+local enJuego = {} -- [participante] = true durante la ronda
 local modoActual = nil
 local faseJugando = false
 
-Manotazo.OnServerEvent:Connect(function(atacante, vista)
+local function golpear(atacante, vista)
 	if typeof(vista) ~= "Vector3" or vista.Magnitude < 0.5 then
 		return
 	end
 	local ahora = os.clock()
-	-- un poco de margen por la latencia
 	if ahora - (ultimoManotazo[atacante] or -math.huge) < C.MANOTAZO_ESPERA * 0.8 then
 		return
 	end
@@ -159,19 +203,16 @@ Manotazo.OnServerEvent:Connect(function(atacante, vista)
 	end
 	vista = vista.Unit
 
-	-- el jugador más cercano delante de ti dentro del alcance
+	-- el participante más cercano delante del atacante (con margen por la latencia)
 	local mejor, mejorDist = nil, math.huge
-	for _, otro in Players:GetPlayers() do
+	for _, otro in participantes() do
 		if otro ~= atacante then
 			local ro = raiz(otro)
 			if ro then
 				local d = ro.Position - r.Position
 				local dist = d.Magnitude
-				-- margen extra por latencia: el otro puede haberse movido un poco
-				if dist <= C.MANOTAZO_ALCANCE + 3 and dist > 0 and d.Unit:Dot(vista) >= C.MANOTAZO_ANGULO - 0.15 then
-					if dist < mejorDist then
-						mejor, mejorDist = otro, dist
-					end
+				if dist > 0 and dist <= C.MANOTAZO_ALCANCE + 3 and d.Unit:Dot(vista) >= C.MANOTAZO_ANGULO - 0.15 and dist < mejorDist then
+					mejor, mejorDist = otro, dist
 				end
 			end
 		end
@@ -180,18 +221,22 @@ Manotazo.OnServerEvent:Connect(function(atacante, vista)
 		return
 	end
 
-	-- empujón: hacia donde miras, con una parte de tu velocidad
 	local plano = Vector3.new(vista.X, 0, vista.Z)
 	if plano.Magnitude < 0.1 then
-		plano = Vector3.new((raiz(mejor).Position - r.Position).X, 0, (raiz(mejor).Position - r.Position).Z)
+		local d = raiz(mejor).Position - r.Position
+		plano = Vector3.new(d.X, 0, d.Z)
 	end
 	plano = plano.Unit
 	local velAtacante = Vector3.new(r.AssemblyLinearVelocity.X, 0, r.AssemblyLinearVelocity.Z).Magnitude
 	local fuerza = C.MANOTAZO_EMPUJE + velAtacante * C.MANOTAZO_EMPUJE_EXTRA_VEL
 	local empuje = plano * fuerza + Vector3.new(0, C.MANOTAZO_EMPUJE_ARRIBA, 0)
 
-	Empujon:FireClient(mejor, empuje)
-	Golpe:FireAllClients(atacante, mejor)
+	if mejor:IsA("Player") then
+		Empujon:FireClient(mejor, empuje)
+	else
+		Bots.empujar(mejor, empuje)
+	end
+	Golpe:FireAllClients(modeloDe(atacante), modeloDe(mejor))
 
 	if faseJugando and modoActual and enJuego[atacante] and enJuego[mejor] then
 		local aviso = modoActual.alGolpear(atacante, mejor)
@@ -199,24 +244,88 @@ Manotazo.OnServerEvent:Connect(function(atacante, vista)
 			ReplicatedStorage:SetAttribute("Mensaje", aviso)
 		end
 	end
+end
+
+Manotazo.OnServerEvent:Connect(golpear)
+
+------------------------------------------------------------------------
+-- Bots
+------------------------------------------------------------------------
+
+Bots.empezar({
+	participantes = participantes,
+	raiz = raiz,
+	esPillador = esPillador,
+	puntos = function()
+		return mapaActual.puntos
+	end,
+	golpear = golpear,
+	activo = function()
+		return faseJugando
+	end,
+})
+
+local function ajustarBots()
+	local reales = #Players:GetPlayers()
+	Bots.ajustar(math.max(0, C.PARTICIPANTES_OBJETIVO - reales), mapaActual.apariciones[1])
+end
+
+Players.PlayerAdded:Connect(ajustarBots)
+Players.PlayerRemoving:Connect(function(p)
+	enJuego[p] = nil
+	ultimoManotazo[p] = nil
+	task.defer(ajustarBots)
 end)
+ajustarBots()
+
+------------------------------------------------------------------------
+-- Caídas y reapariciones
+------------------------------------------------------------------------
+
+local function aparicionAleatoria()
+	local a = mapaActual.apariciones
+	return a[math.random(#a)]
+end
+
+task.spawn(function()
+	while true do
+		for _, p in participantes() do
+			local r = raiz(p)
+			if r and r.Position.Y < mapaActual.alturaMinima then
+				colocar(p, aparicionAleatoria())
+			end
+		end
+		task.wait(0.3)
+	end
+end)
+
+-- quien reaparece (o entra a mitad) va al mapa actual y conserva su marca
+local function alPersonaje(p)
+	task.wait(0.2)
+	colocar(p, aparicionAleatoria())
+	if faseJugando and enJuego[p] then
+		marcar(p, esPillador(p))
+	end
+end
+local function conectar(p)
+	p.CharacterAdded:Connect(function()
+		alPersonaje(p)
+	end)
+	if p.Character then
+		task.spawn(alPersonaje, p)
+	end
+end
+Players.PlayerAdded:Connect(conectar)
+for _, p in Players:GetPlayers() do
+	conectar(p)
+end
 
 ------------------------------------------------------------------------
 -- Rondas
 ------------------------------------------------------------------------
 
-local function listos()
-	local lista = {}
-	for _, p in Players:GetPlayers() do
-		if raiz(p) then
-			table.insert(lista, p)
-		end
-	end
-	return lista
-end
-
-local function anclar(jugadores, anclado)
-	for _, p in jugadores do
+local function anclar(lista, anclado)
+	for _, p in lista do
 		local r = raiz(p)
 		if r then
 			r.Anchored = anclado
@@ -224,99 +333,84 @@ local function anclar(jugadores, anclado)
 	end
 end
 
-Players.PlayerRemoving:Connect(function(p)
-	enJuego[p] = nil
-	ultimoManotazo[p] = nil
-end)
-
--- si alguien reaparece en mitad de la ronda, conserva su marca
-Players.PlayerAdded:Connect(function(p)
-	p.CharacterAdded:Connect(function()
-		task.wait(0.1)
-		if faseJugando and enJuego[p] then
-			marcar(p, p:GetAttribute("Pillador") == true)
+local function activos()
+	local lista = {}
+	for p in enJuego do
+		if (p:IsA("Player") and p.Parent == Players) or (not p:IsA("Player") and p.Parent) then
+			table.insert(lista, p)
 		end
-	end)
-end)
+	end
+	return lista
+end
 
 ReplicatedStorage:SetAttribute("Modo", C.MODO_INICIAL)
+ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
 
 while true do
-	-- 1. Esperar jugadores
-	while #listos() < C.JUGADORES_MINIMOS do
-		fijarFase("Esperando", 0, "Esperando jugadores (" .. #listos() .. "/" .. C.JUGADORES_MINIMOS .. ")")
+	-- 1. Esperar a que haya gente (con los bots casi siempre la hay)
+	while #participantes() < C.JUGADORES_MINIMOS do
+		fijarFase("Esperando", 0, "Esperando jugadores...")
 		task.wait(1)
 	end
 
-	-- 2. Cuenta atrás
+	-- 2. Siguiente mapa y cuenta atrás
+	indiceMapa = indiceMapa % #mapas + 1
+	mapaActual = mapas[indiceMapa]
+	ReplicatedStorage:SetAttribute("Mapa", mapaActual.nombre)
 	modoActual = Modos[C.MODO_INICIAL] or Modos.Contagio
 	ReplicatedStorage:SetAttribute("Modo", modoActual.nombre)
-	local cancelada = false
+
+	-- todos al mapa nuevo
+	for _, p in participantes() do
+		colocar(p, aparicionAleatoria())
+	end
 	for t = C.PREPARACION, 1, -1 do
-		fijarFase("Preparando", t, modoActual.nombre .. " empieza en " .. t)
+		fijarFase("Preparando", t, mapaActual.nombre .. " · " .. modoActual.nombre .. "\nEmpieza en " .. t)
 		task.wait(1)
-		if #listos() < C.JUGADORES_MINIMOS then
-			cancelada = true
+	end
+
+	-- 3. Empezar
+	local lista = participantes()
+	enJuego = {}
+	local apar = table.clone(mapaActual.apariciones)
+	for i, p in lista do
+		enJuego[p] = true
+		colocar(p, apar[(i - 1) % #apar + 1])
+	end
+	local pilladores, mensaje = modoActual.empezar(lista)
+	faseJugando = true
+
+	-- ventaja: los pilladores esperan quietos unos segundos
+	anclar(pilladores, true)
+	for t = C.VENTAJA_HUIDA, 1, -1 do
+		fijarFase("Jugando", C.DURACION_RONDA, mensaje .. " (sale en " .. t .. ")")
+		task.wait(1)
+	end
+	anclar(pilladores, false)
+	fijarFase("Jugando", C.DURACION_RONDA, "")
+
+	-- 4. Ronda
+	local fin = os.clock() + C.DURACION_RONDA
+	while os.clock() < fin do
+		local a = activos()
+		if #a < C.JUGADORES_MINIMOS or modoActual.terminada(a) then
 			break
 		end
+		ReplicatedStorage:SetAttribute("Tiempo", math.ceil(fin - os.clock()))
+		task.wait(0.25)
 	end
 
-	if not cancelada then
-		-- 3. Empezar: todos reaparecen en el mapa
-		for _, p in Players:GetPlayers() do
-			p:LoadCharacter()
-		end
-		task.wait(0.5)
-		local jugadores = listos()
-		enJuego = {}
-		for _, p in jugadores do
-			enJuego[p] = true
-		end
-
-		local pilladores, mensaje = modoActual.empezar(jugadores)
-		faseJugando = true
-
-		-- ventaja: los pilladores esperan quietos unos segundos
-		anclar(pilladores, true)
-		for t = C.VENTAJA_HUIDA, 1, -1 do
-			fijarFase("Jugando", C.DURACION_RONDA, mensaje .. " (sale en " .. t .. ")")
-			task.wait(1)
-		end
-		anclar(pilladores, false)
-		fijarFase("Jugando", C.DURACION_RONDA, "")
-
-		-- 4. Ronda
-		local fin = os.clock() + C.DURACION_RONDA
-		local porTiempo = true
-		while os.clock() < fin do
-			-- quitar a los que se van
-			local activos = {}
-			for p in enJuego do
-				if p.Parent == Players then
-					table.insert(activos, p)
-				end
-			end
-			if #activos < C.JUGADORES_MINIMOS or modoActual.terminada(activos) then
-				porTiempo = false
-				break
-			end
-			ReplicatedStorage:SetAttribute("Tiempo", math.ceil(fin - os.clock()))
-			task.wait(0.25)
-		end
-
-		-- 5. Resultado
-		faseJugando = false
-		local activos = {}
-		for p in enJuego do
-			if p.Parent == Players then
-				table.insert(activos, p)
-			end
-		end
-		fijarFase("Fin", C.PAUSA_FINAL, modoActual.resultado(activos, porTiempo))
-		task.wait(C.PAUSA_FINAL)
-		for _, p in Players:GetPlayers() do
+	-- 5. Resultado
+	faseJugando = false
+	fijarFase("Fin", C.PAUSA_FINAL, modoActual.resultado(activos()))
+	task.wait(C.PAUSA_FINAL)
+	for _, p in participantes() do
+		quitarMarca(p)
+	end
+	for p in enJuego do
+		if p.Parent then
 			quitarMarca(p)
 		end
-		enJuego = {}
 	end
+	enJuego = {}
 end

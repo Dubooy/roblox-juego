@@ -84,7 +84,7 @@ local modo = texto({
 local mensaje = texto({
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.3),
-	Size = UDim2.new(0.9, 0, 0, 50),
+	Size = UDim2.new(0.9, 0, 0, 90),
 	TextSize = 30,
 	TextWrapped = true,
 })
@@ -119,7 +119,9 @@ RunService.RenderStepped:Connect(function()
 	local m = ReplicatedStorage:GetAttribute("Mensaje") or ""
 
 	reloj.Text = fase == "Jugando" and formatoTiempo(t) or ""
-	modo.Text = fase == "Jugando" and string.upper(ReplicatedStorage:GetAttribute("Modo") or "") or ""
+	modo.Text = fase == "Jugando"
+			and string.upper((ReplicatedStorage:GetAttribute("Modo") or "") .. " · " .. (ReplicatedStorage:GetAttribute("Mapa") or ""))
+		or ""
 
 	if m ~= ultimoMensaje then
 		ultimoMensaje = m
@@ -166,8 +168,8 @@ local function sonido(id, volumen, tono, parent)
 end
 
 Golpe.OnClientEvent:Connect(function(atacante, golpeado)
-	local char = golpeado and golpeado.Character
-	local r = char and char:FindFirstChild("HumanoidRootPart")
+	-- atacante y golpeado son modelos (personajes de jugadores o bots)
+	local r = golpeado and golpeado:FindFirstChild("HumanoidRootPart")
 	if r then
 		-- chispazo
 		local a = Instance.new("Attachment")
@@ -187,7 +189,7 @@ Golpe.OnClientEvent:Connect(function(atacante, golpeado)
 			a:Destroy()
 		end)
 	end
-	if golpeado == player then
+	if golpeado ~= nil and golpeado == player.Character then
 		-- sacudida de cámara al recibir
 		local inicio = os.clock()
 		local con

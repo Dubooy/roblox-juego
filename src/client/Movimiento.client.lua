@@ -57,6 +57,11 @@ local function resetState()
 	s.roll = 0
 	s.speed = 0
 
+	s.wallrun = nil -- { normal, lado, hasta }
+	s.wallrunLado = 0
+	s.ultimaPared = nil -- normal de la última pared (no se puede volver a la misma sin tocar suelo)
+	s.wallrunBloqueadoHasta = -math.huge
+
 	s.empujePendiente = nil
 	s.empujeHasta = -math.huge
 end
@@ -114,6 +119,19 @@ local function groundHit()
 	return workspace:Raycast(root.Position, Vector3.new(0, -reach, 0), rayParams)
 end
 
+-- Busca una pared a la izquierda o a la derecha según hacia dónde vas.
+-- Devuelve normal, lado (-1 izquierda, 1 derecha) o nil.
+local function buscarPared(adelante)
+	local derecha = adelante:Cross(Vector3.yAxis)
+	for _, lado in { 1, -1 } do
+		local hit = workspace:Raycast(root.Position, derecha * lado * C.WALLRUN_DISTANCIA, rayParams)
+		if hit and math.abs(hit.Normal.Y) < 0.3 then
+			return hit.Normal, lado
+		end
+	end
+	return nil
+end
+
 local function wishDirection()
 	local move = controls:GetMoveVector() -- x = derecha, z = -adelante (teclado, mando y táctil)
 	if move.Magnitude < 0.01 then
@@ -149,6 +167,8 @@ local function step(dt)
 		end
 		s.lastGroundedAt = now
 		s.airJumpsLeft = C.AIR_JUMPS
+		s.wallrun = nil
+		s.ultimaPared = nil
 	else
 		s.lastAirVelY = vy
 	end
@@ -164,7 +184,17 @@ local function step(dt)
 	-- Salto (con coyote time, buffer y doble salto)
 	if now - s.jumpBufferedAt <= C.JUMP_BUFFER then
 		local jumped = false
-		if grounded or now - s.lastGroundedAt <= C.COYOTE_TIME then
+		if s.wallrun then
+			-- salto de pared: hacia fuera y arriba, recupera el doble salto
+			local n = s.wallrun.normal
+			horiz = flat(horiz - n * horiz:Dot(n)) + n * C.WALLRUN_SALTO_FUERA
+			vy = C.WALLRUN_SALTO_ARRIBA
+			s.ultimaPared = n
+			s.wallrun = nil
+			s.wallrunBloqueadoHasta = now + 0.25
+			s.airJumpsLeft = C.AIR_JUMPS
+			jumped = true
+		elseif grounded or now - s.lastGroundedAt <= C.COYOTE_TIME then
 			vy = C.JUMP_VELOCITY
 			jumped = true
 		elseif s.airJumpsLeft > 0 then
@@ -254,9 +284,47 @@ local function step(dt)
 			horiz = accelerate(horiz, wish, C.WALK_SPEED, C.GROUND_ACCEL, dt)
 		end
 	else
-		horiz = accelerate(horiz, wish, C.AIR_WISH_CAP, C.AIR_ACCEL, dt)
-		horiz = steer(horiz, wish, C.AIR_STEER, dt)
+		-- ¿Empezar a correr por la pared? (en el aire, rápido y empujando hacia delante)
+		if not s.wallrun and now > s.wallrunBloqueadoHasta and horiz.Magnitude >= C.WALLRUN_VEL_MIN
+			and wish.Magnitude > 0 and wish:Dot(horiz.Unit) > 0.3 then
+			local n, lado = buscarPared(horiz.Unit)
+			if n and not (s.ultimaPared and s.ultimaPared:Dot(n) > 0.7) then
+				s.wallrun = { normal = n, lado = lado, hasta = now + C.WALLRUN_DURACION }
+				s.airJumpsLeft = C.AIR_JUMPS
+				vy = math.max(vy, C.WALLRUN_SUBIDA_INICIAL)
+				setY = true
+			end
+		end
+
+		if s.wallrun then
+			local w = s.wallrun
+			local adelante = horiz.Magnitude > 0.1 and horiz.Unit or flat(camera.CFrame.LookVector).Unit
+			local n, lado = buscarPared(adelante)
+			local sigue = n and n:Dot(w.normal) > 0.8 and now < w.hasta
+				and wish.Magnitude > 0 and horiz.Magnitude >= C.WALLRUN_VEL_MIN * 0.6
+			if sigue then
+				w.normal, w.lado = n, lado
+				local tangente = flat(adelante - n * adelante:Dot(n))
+				tangente = tangente.Magnitude > 0.01 and tangente.Unit or adelante
+				local rapidez = math.max(horiz.Magnitude, C.WALLRUN_VEL_MIN)
+				horiz = tangente * rapidez - n * 2 -- un poco hacia la pared para no despegarse
+				vy = math.max(vy - C.WALLRUN_GRAVEDAD * dt, -C.WALLRUN_CAIDA_MAX)
+				setY = true
+			else
+				s.ultimaPared = w.normal
+				s.wallrun = nil
+			end
+		end
+
+		if not s.wallrun then
+			horiz = accelerate(horiz, wish, C.AIR_WISH_CAP, C.AIR_ACCEL, dt)
+			horiz = steer(horiz, wish, C.AIR_STEER, dt)
+		end
 	end
+	if s.dashing or grounded then
+		s.wallrun = nil
+	end
+	s.wallrunLado = s.wallrun and s.wallrun.lado or 0
 
 	if horiz.Magnitude > C.MAX_SPEED and now > s.empujeHasta then
 		horiz = horiz.Unit * C.MAX_SPEED
@@ -274,6 +342,7 @@ local function step(dt)
 	player:SetAttribute("MovDash", s.dashing)
 	player:SetAttribute("MovSuelo", grounded)
 	player:SetAttribute("MovUltimoSalto", s.lastJumpAt)
+	player:SetAttribute("MovPared", s.wallrunLado)
 end
 
 ------------------------------------------------------------------------
@@ -293,6 +362,8 @@ local function cameraStep(dt)
 	if s.sliding then
 		targetRoll += 2
 	end
+	-- corriendo por la pared la cámara se inclina hacia fuera
+	targetRoll += s.wallrunLado * C.WALLRUN_INCLINACION
 	s.roll += (targetRoll - s.roll) * math.min(dt * 10, 1)
 	camera.CFrame *= CFrame.Angles(0, 0, math.rad(s.roll))
 
