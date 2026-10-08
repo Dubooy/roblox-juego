@@ -52,62 +52,344 @@ return {
 
 	-- Servidor (anti-trampas básico)
 	SERVER_SPEED_TOLERANCE = 1.35,
+
+	-- Manotazo
+	MANOTAZO_ALCANCE = 8, -- studs desde el atacante
+	MANOTAZO_ANGULO = 0.45, -- producto escalar mínimo con la vista (0.45 ≈ 63°)
+	MANOTAZO_ESPERA = 0.7, -- segundos entre manotazos
+	MANOTAZO_EMPUJE = 70, -- velocidad horizontal con la que sale el golpeado
+	MANOTAZO_EMPUJE_ARRIBA = 32, -- y hacia arriba
+	MANOTAZO_EMPUJE_EXTRA_VEL = 0.35, -- parte de tu velocidad que se suma al empujón
+	EMPUJE_SIN_LIMITE = 0.5, -- segundos en que el empujado puede superar la velocidad máxima
+
+	-- Partida
+	MODO_INICIAL = "Contagio", -- más adelante se elegirá en el lobby
+	JUGADORES_MINIMOS = 2,
+	PREPARACION = 8, -- cuenta atrás antes de cada ronda
+	VENTAJA_HUIDA = 4, -- segundos que el pillador espera quieto al empezar
+	DURACION_RONDA = 120,
+	PAUSA_FINAL = 6,
 }
-]]></ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX7"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX5"><Properties><string name="Name">Validacion</string><ProtectedString name="Source"><![CDATA[-- Validación básica en el servidor. El cliente mueve su personaje (así se siente
--- instantáneo), y el servidor comprueba que no vaya más rápido de lo posible.
--- De momento solo avisa en la consola; en PvP aquí se devolvería al jugador a su
--- última posición válida.
+]]></ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX8"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX5"><Properties><string name="Name">Partida</string><ProtectedString name="Source"><![CDATA[-- Partida: manotazo (con empujón) y rondas de pilla-pilla.
+--
+-- Modos previstos: "Contagio" y "CoronaRobada". Se elegirán en un lobby más
+-- adelante; de momento se juega siempre C.MODO_INICIAL. Cada modo es una tabla
+-- con empezar / alGolpear / terminada / resultado, así añadir uno nuevo no toca el resto.
+--
+-- Estado público (lo leen los clientes para el HUD):
+--   ReplicatedStorage:GetAttribute("Fase")    "Esperando" | "Preparando" | "Jugando" | "Fin"
+--   ReplicatedStorage:GetAttribute("Modo")    nombre del modo
+--   ReplicatedStorage:GetAttribute("Tiempo")  segundos que quedan de la fase
+--   ReplicatedStorage:GetAttribute("Mensaje") texto grande en pantalla
+--   player:GetAttribute("Pillador")           true si pilla
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 
-workspace.Gravity = C.GRAVITY
+------------------------------------------------------------------------
+-- Remotos
+------------------------------------------------------------------------
 
-local INTERVALO = 0.25
-local AVISOS_PARA_MARCAR = 4
-local limite = math.max(C.MAX_SPEED, C.DASH_SPEED) * C.SERVER_SPEED_TOLERANCE
+local remotos = Instance.new("Folder")
+remotos.Name = "Remotos"
+remotos.Parent = ReplicatedStorage
 
-local registro = {} -- [player] = { pos, avisos }
+local function remoto(nombre)
+	local r = Instance.new("RemoteEvent")
+	r.Name = nombre
+	r.Parent = remotos
+	return r
+end
 
-Players.PlayerAdded:Connect(function(player)
-	player.CameraMode = Enum.CameraMode.LockFirstPerson
-	player.CharacterAdded:Connect(function()
-		registro[player] = nil -- al reaparecer se teletransporta; no contar ese salto
+local Manotazo = remoto("Manotazo") -- cliente → servidor: "he dado un manotazo" (dirección de la vista)
+local Empujon = remoto("Empujon") -- servidor → golpeado: vector de empujón
+local Golpe = remoto("Golpe") -- servidor → todos: (atacante, golpeado) para efectos
+
+------------------------------------------------------------------------
+-- Utilidades
+------------------------------------------------------------------------
+
+local function raiz(player)
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not (hum and hum.Health > 0) then
+		return nil
+	end
+	return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function fijarFase(fase, tiempo, mensaje)
+	ReplicatedStorage:SetAttribute("Fase", fase)
+	ReplicatedStorage:SetAttribute("Tiempo", tiempo or 0)
+	ReplicatedStorage:SetAttribute("Mensaje", mensaje or "")
+end
+
+local COLOR_PILLADOR = Color3.fromRGB(255, 70, 70)
+local COLOR_HUYE = Color3.fromRGB(80, 200, 255)
+
+local function marcar(player, pillador)
+	player:SetAttribute("Pillador", pillador)
+	local char = player.Character
+	if not char then
+		return
+	end
+	local h = char:FindFirstChild("MarcaEquipo")
+	if not h then
+		h = Instance.new("Highlight")
+		h.Name = "MarcaEquipo"
+		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- se ve a través de las paredes
+		h.FillTransparency = 0.75
+		h.Parent = char
+	end
+	h.FillColor = pillador and COLOR_PILLADOR or COLOR_HUYE
+	h.OutlineColor = h.FillColor
+	h.Enabled = true
+end
+
+local function quitarMarca(player)
+	player:SetAttribute("Pillador", nil)
+	local char = player.Character
+	local h = char and char:FindFirstChild("MarcaEquipo")
+	if h then
+		h:Destroy()
+	end
+end
+
+------------------------------------------------------------------------
+-- Modos
+------------------------------------------------------------------------
+
+local Modos = {}
+
+-- Contagio: uno empieza pillando; cada uno que toca pasa a pillar.
+-- Ganan los que huyen si queda alguno al acabar el tiempo.
+Modos.Contagio = {
+	nombre = "Contagio",
+	empezar = function(jugadores)
+		local primero = jugadores[math.random(#jugadores)]
+		for _, p in jugadores do
+			marcar(p, p == primero)
+		end
+		return { primero }, primero.DisplayName .. " pilla. ¡Corred!"
+	end,
+	alGolpear = function(atacante, golpeado)
+		if atacante:GetAttribute("Pillador") and not golpeado:GetAttribute("Pillador") then
+			marcar(golpeado, true)
+			return golpeado.DisplayName .. " ha sido pillado"
+		end
+		return nil
+	end,
+	terminada = function(jugadores)
+		for _, p in jugadores do
+			if not p:GetAttribute("Pillador") then
+				return false
+			end
+		end
+		return true
+	end,
+	resultado = function(jugadores, porTiempo)
+		local libres = {}
+		for _, p in jugadores do
+			if not p:GetAttribute("Pillador") then
+				table.insert(libres, p.DisplayName)
+			end
+		end
+		if #libres == 0 then
+			return "¡Los pilladores ganan! No queda nadie"
+		end
+		return "¡Sobreviven " .. table.concat(libres, ", ") .. "!"
+	end,
+}
+
+-- CoronaRobada: pendiente (se elegirá en el lobby).
+
+------------------------------------------------------------------------
+-- Manotazo
+------------------------------------------------------------------------
+
+local ultimoManotazo = {} -- [player] = os.clock()
+local enJuego = {} -- [player] = true durante la ronda
+local modoActual = nil
+local faseJugando = false
+
+Manotazo.OnServerEvent:Connect(function(atacante, vista)
+	if typeof(vista) ~= "Vector3" or vista.Magnitude < 0.5 then
+		return
+	end
+	local ahora = os.clock()
+	-- un poco de margen por la latencia
+	if ahora - (ultimoManotazo[atacante] or -math.huge) < C.MANOTAZO_ESPERA * 0.8 then
+		return
+	end
+	ultimoManotazo[atacante] = ahora
+
+	local r = raiz(atacante)
+	if not r then
+		return
+	end
+	vista = vista.Unit
+
+	-- el jugador más cercano delante de ti dentro del alcance
+	local mejor, mejorDist = nil, math.huge
+	for _, otro in Players:GetPlayers() do
+		if otro ~= atacante then
+			local ro = raiz(otro)
+			if ro then
+				local d = ro.Position - r.Position
+				local dist = d.Magnitude
+				-- margen extra por latencia: el otro puede haberse movido un poco
+				if dist <= C.MANOTAZO_ALCANCE + 3 and dist > 0 and d.Unit:Dot(vista) >= C.MANOTAZO_ANGULO - 0.15 then
+					if dist < mejorDist then
+						mejor, mejorDist = otro, dist
+					end
+				end
+			end
+		end
+	end
+	if not mejor then
+		return
+	end
+
+	-- empujón: hacia donde miras, con una parte de tu velocidad
+	local plano = Vector3.new(vista.X, 0, vista.Z)
+	if plano.Magnitude < 0.1 then
+		plano = Vector3.new((raiz(mejor).Position - r.Position).X, 0, (raiz(mejor).Position - r.Position).Z)
+	end
+	plano = plano.Unit
+	local velAtacante = Vector3.new(r.AssemblyLinearVelocity.X, 0, r.AssemblyLinearVelocity.Z).Magnitude
+	local fuerza = C.MANOTAZO_EMPUJE + velAtacante * C.MANOTAZO_EMPUJE_EXTRA_VEL
+	local empuje = plano * fuerza + Vector3.new(0, C.MANOTAZO_EMPUJE_ARRIBA, 0)
+
+	Empujon:FireClient(mejor, empuje)
+	Golpe:FireAllClients(atacante, mejor)
+
+	if faseJugando and modoActual and enJuego[atacante] and enJuego[mejor] then
+		local aviso = modoActual.alGolpear(atacante, mejor)
+		if aviso then
+			ReplicatedStorage:SetAttribute("Mensaje", aviso)
+		end
+	end
+end)
+
+------------------------------------------------------------------------
+-- Rondas
+------------------------------------------------------------------------
+
+local function listos()
+	local lista = {}
+	for _, p in Players:GetPlayers() do
+		if raiz(p) then
+			table.insert(lista, p)
+		end
+	end
+	return lista
+end
+
+local function anclar(jugadores, anclado)
+	for _, p in jugadores do
+		local r = raiz(p)
+		if r then
+			r.Anchored = anclado
+		end
+	end
+end
+
+Players.PlayerRemoving:Connect(function(p)
+	enJuego[p] = nil
+	ultimoManotazo[p] = nil
+end)
+
+-- si alguien reaparece en mitad de la ronda, conserva su marca
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function()
+		task.wait(0.1)
+		if faseJugando and enJuego[p] then
+			marcar(p, p:GetAttribute("Pillador") == true)
+		end
 	end)
 end)
 
-Players.PlayerRemoving:Connect(function(player)
-	registro[player] = nil
-end)
+ReplicatedStorage:SetAttribute("Modo", C.MODO_INICIAL)
 
 while true do
-	task.wait(INTERVALO)
-	for _, player in Players:GetPlayers() do
-		local char = player.Character
-		local root = char and char:FindFirstChild("HumanoidRootPart")
-		if not root then
-			continue
+	-- 1. Esperar jugadores
+	while #listos() < C.JUGADORES_MINIMOS do
+		fijarFase("Esperando", 0, "Esperando jugadores (" .. #listos() .. "/" .. C.JUGADORES_MINIMOS .. ")")
+		task.wait(1)
+	end
+
+	-- 2. Cuenta atrás
+	modoActual = Modos[C.MODO_INICIAL] or Modos.Contagio
+	ReplicatedStorage:SetAttribute("Modo", modoActual.nombre)
+	local cancelada = false
+	for t = C.PREPARACION, 1, -1 do
+		fijarFase("Preparando", t, modoActual.nombre .. " empieza en " .. t)
+		task.wait(1)
+		if #listos() < C.JUGADORES_MINIMOS then
+			cancelada = true
+			break
 		end
-		local pos = root.Position
-		local r = registro[player]
-		if r and not root:GetAttribute("Teletransportado") then
-			local d = Vector3.new(pos.X - r.pos.X, 0, pos.Z - r.pos.Z).Magnitude
-			if d / INTERVALO > limite then
-				r.avisos += 1
-				if r.avisos >= AVISOS_PARA_MARCAR then
-					warn(("[Movimiento] %s va demasiado rápido (%.0f studs/s)"):format(player.Name, d / INTERVALO))
-					r.avisos = 0
+	end
+
+	if not cancelada then
+		-- 3. Empezar: todos reaparecen en el mapa
+		for _, p in Players:GetPlayers() do
+			p:LoadCharacter()
+		end
+		task.wait(0.5)
+		local jugadores = listos()
+		enJuego = {}
+		for _, p in jugadores do
+			enJuego[p] = true
+		end
+
+		local pilladores, mensaje = modoActual.empezar(jugadores)
+		faseJugando = true
+
+		-- ventaja: los pilladores esperan quietos unos segundos
+		anclar(pilladores, true)
+		for t = C.VENTAJA_HUIDA, 1, -1 do
+			fijarFase("Jugando", C.DURACION_RONDA, mensaje .. " (sale en " .. t .. ")")
+			task.wait(1)
+		end
+		anclar(pilladores, false)
+		fijarFase("Jugando", C.DURACION_RONDA, "")
+
+		-- 4. Ronda
+		local fin = os.clock() + C.DURACION_RONDA
+		local porTiempo = true
+		while os.clock() < fin do
+			-- quitar a los que se van
+			local activos = {}
+			for p in enJuego do
+				if p.Parent == Players then
+					table.insert(activos, p)
 				end
-			else
-				r.avisos = math.max(0, r.avisos - 1)
 			end
-			r.pos = pos
-		else
-			root:SetAttribute("Teletransportado", nil)
-			registro[player] = { pos = pos, avisos = 0 }
+			if #activos < C.JUGADORES_MINIMOS or modoActual.terminada(activos) then
+				porTiempo = false
+				break
+			end
+			ReplicatedStorage:SetAttribute("Tiempo", math.ceil(fin - os.clock()))
+			task.wait(0.25)
 		end
+
+		-- 5. Resultado
+		faseJugando = false
+		local activos = {}
+		for p in enJuego do
+			if p.Parent == Players then
+				table.insert(activos, p)
+			end
+		end
+		fijarFase("Fin", C.PAUSA_FINAL, modoActual.resultado(activos, porTiempo))
+		task.wait(C.PAUSA_FINAL)
+		for _, p in Players:GetPlayers() do
+			quitarMarca(p)
+		end
+		enJuego = {}
 	end
 end
 ]]></ProtectedString></Properties></Item><Item class="Script" referent="RBX6"><Properties><string name="Name">PistaPruebas</string><ProtectedString name="Source"><![CDATA[-- Construye un mapa de pruebas al pulsar Play: suelo cuadriculado (para notar la
@@ -350,7 +632,295 @@ for i = 1, 13 do
 	})
 end
 cartel("Bajada: mantén slide cuesta abajo", Vector3.new(170, TORRE + 8, -110))
-]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX11"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX10"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX8"><Properties><string name="Name">Movimiento</string><ProtectedString name="Source"><![CDATA[-- Controlador de movimiento en primera persona: dash, slide, doble salto,
+]]></ProtectedString></Properties></Item><Item class="Script" referent="RBX7"><Properties><string name="Name">Validacion</string><ProtectedString name="Source"><![CDATA[-- Validación básica en el servidor. El cliente mueve su personaje (así se siente
+-- instantáneo), y el servidor comprueba que no vaya más rápido de lo posible.
+-- De momento solo avisa en la consola; en PvP aquí se devolvería al jugador a su
+-- última posición válida.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+
+workspace.Gravity = C.GRAVITY
+
+local INTERVALO = 0.25
+local AVISOS_PARA_MARCAR = 4
+local limite = math.max(C.MAX_SPEED, C.DASH_SPEED, C.MANOTAZO_EMPUJE + C.MAX_SPEED * C.MANOTAZO_EMPUJE_EXTRA_VEL) * C.SERVER_SPEED_TOLERANCE
+
+local registro = {} -- [player] = { pos, avisos }
+
+Players.PlayerAdded:Connect(function(player)
+	player.CameraMode = Enum.CameraMode.LockFirstPerson
+	player.CharacterAdded:Connect(function()
+		registro[player] = nil -- al reaparecer se teletransporta; no contar ese salto
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	registro[player] = nil
+end)
+
+while true do
+	task.wait(INTERVALO)
+	for _, player in Players:GetPlayers() do
+		local char = player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not root then
+			continue
+		end
+		local pos = root.Position
+		local r = registro[player]
+		if r and not root:GetAttribute("Teletransportado") then
+			local d = Vector3.new(pos.X - r.pos.X, 0, pos.Z - r.pos.Z).Magnitude
+			if d / INTERVALO > limite then
+				r.avisos += 1
+				if r.avisos >= AVISOS_PARA_MARCAR then
+					warn(("[Movimiento] %s va demasiado rápido (%.0f studs/s)"):format(player.Name, d / INTERVALO))
+					r.avisos = 0
+				end
+			else
+				r.avisos = math.max(0, r.avisos - 1)
+			end
+			r.pos = pos
+		else
+			root:SetAttribute("Teletransportado", nil)
+			registro[player] = { pos = pos, avisos = 0 }
+		end
+	end
+end
+]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX13"><Properties><string name="Name">StarterPlayer</string><token name="CameraMode">1</token></Properties><Item class="StarterPlayerScripts" referent="RBX12"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX9"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona (viewmodel).
+-- Dos brazos con el color de piel y la ropa del personaje, pegados a la cámara.
+-- Se balancean al andar, se retrasan al girar la vista y reaccionan al dash,
+-- al slide, al salto y al aterrizaje. Lee el estado que publica Movimiento.client.lua.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local modelo -- Model con los brazos
+local brazos = {} -- { lado = 1/-1, raiz = Part }
+
+local estado = {
+	tiempo = 0,
+	bob = 0,
+	sway = Vector2.zero,
+	slide = 0,
+	dash = 0,
+	aire = 0,
+	aterrizaje = 0,
+	estabaEnSuelo = true,
+	ultimoSalto = -math.huge,
+	salto = 0,
+	ultimoManotazo = -math.huge,
+}
+
+local function crearParte(nombre, tam, color, material)
+	local p = Instance.new("Part")
+	p.Name = nombre
+	p.Size = tam
+	p.Color = color
+	p.Material = material or Enum.Material.SmoothPlastic
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	return p
+end
+
+local function redondear(p)
+	-- malla simple (se puede cambiar por una malla redondeada más adelante)
+	local m = Instance.new("SpecialMesh")
+	m.MeshType = Enum.MeshType.Brick
+	m.Parent = p
+	return p
+end
+
+local function coloresDelPersonaje(char)
+	local piel = Color3.fromRGB(234, 184, 146)
+	local manga = Color3.fromRGB(45, 60, 90)
+	local bc = char:FindFirstChildOfClass("BodyColors")
+	if bc then
+		piel = bc.LeftArmColor3
+	end
+	local brazo = char:FindFirstChild("LeftHand") or char:FindFirstChild("Left Arm")
+	if brazo and not bc then
+		piel = brazo.Color
+	end
+	local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+	if torso then
+		manga = torso.Color
+	end
+	return piel, manga
+end
+
+local function construir(char)
+	if modelo then
+		modelo:Destroy()
+	end
+	brazos = {}
+	modelo = Instance.new("Model")
+	modelo.Name = "BrazosVista"
+
+	local piel, manga = coloresDelPersonaje(char)
+
+	for _, lado in { -1, 1 } do
+		local raiz = crearParte("Raiz", Vector3.new(0.05, 0.05, 0.05), piel)
+		raiz.Transparency = 1
+		raiz.Parent = modelo
+
+		-- antebrazo con manga, apuntando hacia delante (eje -Z de la cámara)
+		local antebrazo = redondear(crearParte("Antebrazo", Vector3.new(0.32, 0.32, 1.25), manga))
+		antebrazo.Parent = modelo
+		local puno = redondear(crearParte("Puno", Vector3.new(0.36, 0.36, 0.12), manga:Lerp(Color3.new(0, 0, 0), 0.25)))
+		puno.Parent = modelo
+		local mano = redondear(crearParte("Mano", Vector3.new(0.3, 0.26, 0.34), piel))
+		mano.Parent = modelo
+		local pulgar = redondear(crearParte("Pulgar", Vector3.new(0.1, 0.1, 0.18), piel))
+		pulgar.Parent = modelo
+
+		table.insert(brazos, {
+			lado = lado,
+			piezas = {
+				{ parte = antebrazo, off = CFrame.new(0, 0, 0) },
+				{ parte = puno, off = CFrame.new(0, 0, -0.62) },
+				{ parte = mano, off = CFrame.new(0, -0.01, -0.84) },
+				{ parte = pulgar, off = CFrame.new(-0.17 * lado, 0.06, -0.78) },
+			},
+		})
+	end
+
+	modelo.Parent = camera
+end
+
+local function lerp(a, b, t)
+	return a + (b - a) * t
+end
+
+local function actualizar(dt)
+	if not modelo or not modelo.Parent then
+		return
+	end
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local vivo = hum and hum.Health > 0
+	-- solo en primera persona
+	local primera = char and char:FindFirstChild("Head")
+		and (camera.CFrame.Position - char.Head.Position).Magnitude < 1.5
+	modelo.Parent = (vivo and primera) and camera or nil
+	if not (vivo and primera) then
+		return
+	end
+
+	local vel = player:GetAttribute("MovVelocidad") or 0
+	local enSlide = player:GetAttribute("MovSlide") == true
+	local enDash = player:GetAttribute("MovDash") == true
+	local enSuelo = player:GetAttribute("MovSuelo") ~= false
+	local ultimoSalto = player:GetAttribute("MovUltimoSalto") or -math.huge
+
+	local k = math.min(dt * 12, 1)
+	estado.tiempo += dt
+
+	-- balanceo al andar (más rápido y amplio con la velocidad)
+	local andar = enSuelo and not enSlide and math.clamp(vel / 16, 0, 1.6) or 0
+	estado.bob += dt * (6 + vel * 0.35) * (andar > 0.05 and 1 or 0)
+	local bobAmp = lerp(0, 1, math.min(andar, 1))
+
+	-- retraso al girar la vista
+	local delta = UserInputService:GetMouseDelta()
+	local objetivoSway = Vector2.new(math.clamp(-delta.X * 0.004, -0.15, 0.15), math.clamp(delta.Y * 0.004, -0.15, 0.15))
+	estado.sway = estado.sway:Lerp(objetivoSway, math.min(dt * 8, 1))
+
+	estado.slide = lerp(estado.slide, enSlide and 1 or 0, k)
+	estado.dash = lerp(estado.dash, enDash and 1 or 0, math.min(dt * 18, 1))
+	estado.aire = lerp(estado.aire, enSuelo and 0 or 1, math.min(dt * 6, 1))
+
+	if ultimoSalto ~= estado.ultimoSalto then
+		estado.ultimoSalto = ultimoSalto
+		estado.salto = 1
+	end
+	estado.salto = lerp(estado.salto, 0, math.min(dt * 5, 1))
+
+	if enSuelo and not estado.estabaEnSuelo then
+		estado.aterrizaje = 1
+	end
+	estado.estabaEnSuelo = enSuelo
+	estado.aterrizaje = lerp(estado.aterrizaje, 0, math.min(dt * 9, 1))
+
+	-- manotazo: el brazo derecho sale disparado y vuelve (0 → 1 → 0 en ~0,3 s)
+	local tm = os.clock() - (player:GetAttribute("MovManotazo") or -math.huge)
+	local golpe = 0
+	if tm < 0.08 then
+		golpe = tm / 0.08
+	elseif tm < 0.32 then
+		golpe = 1 - (tm - 0.08) / 0.24
+		golpe = golpe * golpe
+	end
+
+	local respira = math.sin(estado.tiempo * 1.6) * 0.012
+
+	for _, b in brazos do
+		local l = b.lado
+		local fase = estado.bob + (l == 1 and math.pi or 0)
+		local bobX = math.cos(fase) * 0.05 * bobAmp
+		local bobY = math.abs(math.sin(fase)) * 0.07 * bobAmp
+
+		-- posición de reposo: abajo a cada lado, un poco hacia dentro
+		local pos = Vector3.new(0.85 * l, -0.85, -1.15)
+		local rot = CFrame.Angles(math.rad(8), math.rad(-10 * l), math.rad(-6 * l))
+
+		pos += Vector3.new(bobX, -bobY + respira, 0)
+		pos += Vector3.new(estado.sway.X, estado.sway.Y, 0)
+
+		-- slide: los brazos se abren y bajan para equilibrarse
+		pos += Vector3.new(0.35 * l, -0.15, 0.25) * estado.slide
+		rot *= CFrame.Angles(math.rad(-20) * estado.slide, 0, math.rad(-25 * l) * estado.slide)
+
+		-- dash: los brazos se van hacia atrás
+		pos += Vector3.new(0.1 * l, -0.35, 0.7) * estado.dash
+		rot *= CFrame.Angles(math.rad(35) * estado.dash, 0, 0)
+
+		-- en el aire: suben un poco; al saltar, impulso hacia arriba
+		pos += Vector3.new(0.05 * l, 0.1, 0) * estado.aire + Vector3.new(0, 0.25, 0) * estado.salto
+		rot *= CFrame.Angles(math.rad(-15) * estado.salto, 0, 0)
+
+		-- manotazo con la mano derecha, abierta y de lado
+		if l == 1 and golpe > 0 then
+			pos += Vector3.new(-0.75, 0.55, -0.9) * golpe
+			rot *= CFrame.Angles(math.rad(-10) * golpe, math.rad(25) * golpe, math.rad(80) * golpe)
+		elseif l == -1 then
+			pos += Vector3.new(0, -0.1, 0.15) * golpe -- el otro brazo se recoge
+		end
+
+		-- aterrizaje: bajan de golpe
+		pos += Vector3.new(0, -0.22, 0) * estado.aterrizaje
+
+		local base = camera.CFrame * CFrame.new(pos) * rot
+		for _, pieza in b.piezas do
+			pieza.parte.CFrame = base * pieza.off
+		end
+	end
+end
+
+local function alAparecer(char)
+	char:WaitForChild("Humanoid")
+	task.wait(0.2) -- espera a que carguen los colores
+	construir(char)
+end
+
+player.CharacterAdded:Connect(alAparecer)
+if player.Character then
+	task.spawn(alAparecer, player.Character)
+end
+
+RunService:BindToRenderStep("BrazosVista", Enum.RenderPriority.Camera.Value + 2, actualizar)
+]]></ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX10"><Properties><string name="Name">Movimiento</string><ProtectedString name="Source"><![CDATA[-- Controlador de movimiento en primera persona: dash, slide, doble salto,
 -- coyote time, buffer de salto y bunny-hop. Va en StarterPlayerScripts.
 --
 -- Idea: el Humanoid sigue encargándose de la gravedad, las colisiones y el suelo,
@@ -408,6 +978,9 @@ local function resetState()
 	s.landDip = 0
 	s.roll = 0
 	s.speed = 0
+
+	s.empujePendiente = nil
+	s.empujeHasta = -math.huge
 end
 resetState()
 
@@ -536,6 +1109,23 @@ local function step(dt)
 		end
 	end
 
+	-- Empujón recibido (manotazo de otro jugador)
+	if s.empujePendiente then
+		local e = s.empujePendiente
+		s.empujePendiente = nil
+		horiz = flat(e)
+		vy = e.Y
+		setY = true
+		s.dashing = false
+		s.sliding = false
+		s.lastJumpAt = now
+		s.lastGroundedAt = -math.huge
+		grounded = false
+		s.empujeHasta = now + C.EMPUJE_SIN_LIMITE
+		s.fovPunch = C.FOV_DASH_PUNCH
+		humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+	end
+
 	-- Dash
 	if s.dashQueued then
 		s.dashQueued = false
@@ -590,7 +1180,7 @@ local function step(dt)
 		horiz = steer(horiz, wish, C.AIR_STEER, dt)
 	end
 
-	if horiz.Magnitude > C.MAX_SPEED then
+	if horiz.Magnitude > C.MAX_SPEED and now > s.empujeHasta then
 		horiz = horiz.Unit * C.MAX_SPEED
 	end
 
@@ -757,221 +1347,220 @@ if player.Character then
 	task.spawn(onCharacter, player.Character)
 end
 
+-- El servidor avisa cuando te dan un manotazo
+ReplicatedStorage:WaitForChild("Remotos"):WaitForChild("Empujon").OnClientEvent:Connect(function(vector)
+	if typeof(vector) == "Vector3" then
+		s.empujePendiente = vector
+	end
+end)
+
 RunService.PreSimulation:Connect(step)
 RunService:BindToRenderStep("MovimientoCamara", Enum.RenderPriority.Camera.Value + 1, function(dt)
 	cameraStep(dt)
 	hudStep()
 end)
-]]></ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX9"><Properties><string name="Name">Brazos</string><ProtectedString name="Source"><![CDATA[-- Brazos en primera persona (viewmodel).
--- Dos brazos con el color de piel y la ropa del personaje, pegados a la cámara.
--- Se balancean al andar, se retrasan al girar la vista y reaccionan al dash,
--- al slide, al salto y al aterrizaje. Lee el estado que publica Movimiento.client.lua.
+]]></ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX11"><Properties><string name="Name">Partida</string><ProtectedString name="Source"><![CDATA[-- Cliente de la partida: botón de manotazo, HUD de la ronda y efectos al golpear.
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ContextActionService = game:GetService("ContextActionService")
+local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
+
+local C = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local remotos = ReplicatedStorage:WaitForChild("Remotos")
+local Manotazo = remotos:WaitForChild("Manotazo")
+local Golpe = remotos:WaitForChild("Golpe")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
-local modelo -- Model con los brazos
-local brazos = {} -- { lado = 1/-1, raiz = Part }
+------------------------------------------------------------------------
+-- Manotazo
+------------------------------------------------------------------------
 
-local estado = {
-	tiempo = 0,
-	bob = 0,
-	sway = Vector2.zero,
-	slide = 0,
-	dash = 0,
-	aire = 0,
-	aterrizaje = 0,
-	estabaEnSuelo = true,
-	ultimoSalto = -math.huge,
-	salto = 0,
-}
+local ultimo = -math.huge
 
-local function crearParte(nombre, tam, color, material)
-	local p = Instance.new("Part")
-	p.Name = nombre
-	p.Size = tam
-	p.Color = color
-	p.Material = material or Enum.Material.SmoothPlastic
-	p.Anchored = true
-	p.CanCollide = false
-	p.CanQuery = false
-	p.CanTouch = false
-	p.CastShadow = false
-	p.TopSurface = Enum.SurfaceType.Smooth
-	p.BottomSurface = Enum.SurfaceType.Smooth
-	return p
-end
-
-local function redondear(p)
-	-- malla simple (se puede cambiar por una malla redondeada más adelante)
-	local m = Instance.new("SpecialMesh")
-	m.MeshType = Enum.MeshType.Brick
-	m.Parent = p
-	return p
-end
-
-local function coloresDelPersonaje(char)
-	local piel = Color3.fromRGB(234, 184, 146)
-	local manga = Color3.fromRGB(45, 60, 90)
-	local bc = char:FindFirstChildOfClass("BodyColors")
-	if bc then
-		piel = bc.LeftArmColor3
-	end
-	local brazo = char:FindFirstChild("LeftHand") or char:FindFirstChild("Left Arm")
-	if brazo and not bc then
-		piel = brazo.Color
-	end
-	local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-	if torso then
-		manga = torso.Color
-	end
-	return piel, manga
-end
-
-local function construir(char)
-	if modelo then
-		modelo:Destroy()
-	end
-	brazos = {}
-	modelo = Instance.new("Model")
-	modelo.Name = "BrazosVista"
-
-	local piel, manga = coloresDelPersonaje(char)
-
-	for _, lado in { -1, 1 } do
-		local raiz = crearParte("Raiz", Vector3.new(0.05, 0.05, 0.05), piel)
-		raiz.Transparency = 1
-		raiz.Parent = modelo
-
-		-- antebrazo con manga, apuntando hacia delante (eje -Z de la cámara)
-		local antebrazo = redondear(crearParte("Antebrazo", Vector3.new(0.32, 0.32, 1.25), manga))
-		antebrazo.Parent = modelo
-		local puno = redondear(crearParte("Puno", Vector3.new(0.36, 0.36, 0.12), manga:Lerp(Color3.new(0, 0, 0), 0.25)))
-		puno.Parent = modelo
-		local mano = redondear(crearParte("Mano", Vector3.new(0.3, 0.26, 0.34), piel))
-		mano.Parent = modelo
-		local pulgar = redondear(crearParte("Pulgar", Vector3.new(0.1, 0.1, 0.18), piel))
-		pulgar.Parent = modelo
-
-		table.insert(brazos, {
-			lado = lado,
-			piezas = {
-				{ parte = antebrazo, off = CFrame.new(0, 0, 0) },
-				{ parte = puno, off = CFrame.new(0, 0, -0.62) },
-				{ parte = mano, off = CFrame.new(0, -0.01, -0.84) },
-				{ parte = pulgar, off = CFrame.new(-0.17 * lado, 0.06, -0.78) },
-			},
-		})
-	end
-
-	modelo.Parent = camera
-end
-
-local function lerp(a, b, t)
-	return a + (b - a) * t
-end
-
-local function actualizar(dt)
-	if not modelo or not modelo.Parent then
+local function darManotazo()
+	local ahora = os.clock()
+	if ahora - ultimo < C.MANOTAZO_ESPERA then
 		return
 	end
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	local vivo = hum and hum.Health > 0
-	-- solo en primera persona
-	local primera = char and char:FindFirstChild("Head")
-		and (camera.CFrame.Position - char.Head.Position).Magnitude < 1.5
-	modelo.Parent = (vivo and primera) and camera or nil
-	if not (vivo and primera) then
+	if not (hum and hum.Health > 0) then
 		return
 	end
+	ultimo = ahora
+	player:SetAttribute("MovManotazo", ahora) -- los brazos lo animan
+	Manotazo:FireServer(camera.CFrame.LookVector)
+end
 
-	local vel = player:GetAttribute("MovVelocidad") or 0
-	local enSlide = player:GetAttribute("MovSlide") == true
-	local enDash = player:GetAttribute("MovDash") == true
-	local enSuelo = player:GetAttribute("MovSuelo") ~= false
-	local ultimoSalto = player:GetAttribute("MovUltimoSalto") or -math.huge
-
-	local k = math.min(dt * 12, 1)
-	estado.tiempo += dt
-
-	-- balanceo al andar (más rápido y amplio con la velocidad)
-	local andar = enSuelo and not enSlide and math.clamp(vel / 16, 0, 1.6) or 0
-	estado.bob += dt * (6 + vel * 0.35) * (andar > 0.05 and 1 or 0)
-	local bobAmp = lerp(0, 1, math.min(andar, 1))
-
-	-- retraso al girar la vista
-	local delta = UserInputService:GetMouseDelta()
-	local objetivoSway = Vector2.new(math.clamp(-delta.X * 0.004, -0.15, 0.15), math.clamp(delta.Y * 0.004, -0.15, 0.15))
-	estado.sway = estado.sway:Lerp(objetivoSway, math.min(dt * 8, 1))
-
-	estado.slide = lerp(estado.slide, enSlide and 1 or 0, k)
-	estado.dash = lerp(estado.dash, enDash and 1 or 0, math.min(dt * 18, 1))
-	estado.aire = lerp(estado.aire, enSuelo and 0 or 1, math.min(dt * 6, 1))
-
-	if ultimoSalto ~= estado.ultimoSalto then
-		estado.ultimoSalto = ultimoSalto
-		estado.salto = 1
+ContextActionService:BindActionAtPriority("Manotazo", function(_, estado)
+	if estado == Enum.UserInputState.Begin then
+		darManotazo()
 	end
-	estado.salto = lerp(estado.salto, 0, math.min(dt * 5, 1))
+	return Enum.ContextActionResult.Pass
+end, true, Enum.ContextActionPriority.High.Value, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2, Enum.KeyCode.E)
+ContextActionService:SetTitle("Manotazo", "Manotazo")
+ContextActionService:SetPosition("Manotazo", UDim2.new(1, -250, 1, -130))
 
-	if enSuelo and not estado.estabaEnSuelo then
-		estado.aterrizaje = 1
+------------------------------------------------------------------------
+-- HUD
+------------------------------------------------------------------------
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "HUDPartida"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local function texto(props)
+	local t = Instance.new("TextLabel")
+	t.BackgroundTransparency = 1
+	t.Font = Enum.Font.GothamBlack
+	t.TextColor3 = Color3.new(1, 1, 1)
+	t.TextStrokeTransparency = 0.4
+	for k, v in props do
+		t[k] = v
 	end
-	estado.estabaEnSuelo = enSuelo
-	estado.aterrizaje = lerp(estado.aterrizaje, 0, math.min(dt * 9, 1))
+	t.Parent = gui
+	return t
+end
 
-	local respira = math.sin(estado.tiempo * 1.6) * 0.012
+local reloj = texto({
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, 16),
+	Size = UDim2.fromOffset(200, 40),
+	TextSize = 34,
+})
+local modo = texto({
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, 54),
+	Size = UDim2.fromOffset(300, 20),
+	TextSize = 16,
+	Font = Enum.Font.GothamBold,
+	TextTransparency = 0.2,
+})
+local mensaje = texto({
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.3),
+	Size = UDim2.new(0.9, 0, 0, 50),
+	TextSize = 30,
+	TextWrapped = true,
+})
+local rol = texto({
+	AnchorPoint = Vector2.new(0, 0),
+	Position = UDim2.new(0, 20, 0, 16),
+	Size = UDim2.fromOffset(240, 36),
+	TextSize = 24,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
 
-	for _, b in brazos do
-		local l = b.lado
-		local fase = estado.bob + (l == 1 and math.pi or 0)
-		local bobX = math.cos(fase) * 0.05 * bobAmp
-		local bobY = math.abs(math.sin(fase)) * 0.07 * bobAmp
+-- borde rojo en pantalla cuando pillas
+local bordeStroke = Instance.new("UIStroke")
+bordeStroke.Thickness = 10
+bordeStroke.Color = Color3.fromRGB(255, 60, 60)
+bordeStroke.Transparency = 1
+local bordeFrame = Instance.new("Frame")
+bordeFrame.BackgroundTransparency = 1
+bordeFrame.Size = UDim2.fromScale(1, 1)
+bordeFrame.Parent = gui
+bordeStroke.Parent = bordeFrame
 
-		-- posición de reposo: abajo a cada lado, un poco hacia dentro
-		local pos = Vector3.new(0.85 * l, -0.85, -1.15)
-		local rot = CFrame.Angles(math.rad(8), math.rad(-10 * l), math.rad(-6 * l))
+local function formatoTiempo(seg)
+	seg = math.max(0, math.floor(seg))
+	return string.format("%d:%02d", seg // 60, seg % 60)
+end
 
-		pos += Vector3.new(bobX, -bobY + respira, 0)
-		pos += Vector3.new(estado.sway.X, estado.sway.Y, 0)
+local ultimoMensaje = ""
+RunService.RenderStepped:Connect(function()
+	local fase = ReplicatedStorage:GetAttribute("Fase") or "Esperando"
+	local t = ReplicatedStorage:GetAttribute("Tiempo") or 0
+	local m = ReplicatedStorage:GetAttribute("Mensaje") or ""
 
-		-- slide: los brazos se abren y bajan para equilibrarse
-		pos += Vector3.new(0.35 * l, -0.15, 0.25) * estado.slide
-		rot *= CFrame.Angles(math.rad(-20) * estado.slide, 0, math.rad(-25 * l) * estado.slide)
+	reloj.Text = fase == "Jugando" and formatoTiempo(t) or ""
+	modo.Text = fase == "Jugando" and string.upper(ReplicatedStorage:GetAttribute("Modo") or "") or ""
 
-		-- dash: los brazos se van hacia atrás
-		pos += Vector3.new(0.1 * l, -0.35, 0.7) * estado.dash
-		rot *= CFrame.Angles(math.rad(35) * estado.dash, 0, 0)
-
-		-- en el aire: suben un poco; al saltar, impulso hacia arriba
-		pos += Vector3.new(0.05 * l, 0.1, 0) * estado.aire + Vector3.new(0, 0.25, 0) * estado.salto
-		rot *= CFrame.Angles(math.rad(-15) * estado.salto, 0, 0)
-
-		-- aterrizaje: bajan de golpe
-		pos += Vector3.new(0, -0.22, 0) * estado.aterrizaje
-
-		local base = camera.CFrame * CFrame.new(pos) * rot
-		for _, pieza in b.piezas do
-			pieza.parte.CFrame = base * pieza.off
+	if m ~= ultimoMensaje then
+		ultimoMensaje = m
+		mensaje.Text = m
+		mensaje.TextTransparency = 0
+		mensaje.TextStrokeTransparency = 0.4
+		if fase == "Jugando" and m ~= "" then
+			-- los avisos de la ronda se desvanecen solos
+			task.delay(2.5, function()
+				if ultimoMensaje == m then
+					TweenService:Create(mensaje, TweenInfo.new(0.6), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+				end
+			end)
 		end
 	end
+
+	local pillador = player:GetAttribute("Pillador")
+	if pillador == true then
+		rol.Text = "PILLAS"
+		rol.TextColor3 = Color3.fromRGB(255, 90, 90)
+	elseif pillador == false then
+		rol.Text = "HUYE"
+		rol.TextColor3 = Color3.fromRGB(110, 210, 255)
+	else
+		rol.Text = ""
+	end
+	bordeStroke.Transparency = pillador == true and 0.35 or 1
+end)
+
+------------------------------------------------------------------------
+-- Efectos al golpear
+------------------------------------------------------------------------
+
+local function sonido(id, volumen, tono, parent)
+	local s = Instance.new("Sound")
+	s.SoundId = id
+	s.Volume = volumen
+	s.PlaybackSpeed = tono
+	s.Parent = parent
+	s:Play()
+	s.Ended:Once(function()
+		s:Destroy()
+	end)
 end
 
-local function alAparecer(char)
-	char:WaitForChild("Humanoid")
-	task.wait(0.2) -- espera a que carguen los colores
-	construir(char)
-end
-
-player.CharacterAdded:Connect(alAparecer)
-if player.Character then
-	task.spawn(alAparecer, player.Character)
-end
-
-RunService:BindToRenderStep("BrazosVista", Enum.RenderPriority.Camera.Value + 2, actualizar)
+Golpe.OnClientEvent:Connect(function(atacante, golpeado)
+	local char = golpeado and golpeado.Character
+	local r = char and char:FindFirstChild("HumanoidRootPart")
+	if r then
+		-- chispazo
+		local a = Instance.new("Attachment")
+		a.Parent = r
+		local p = Instance.new("ParticleEmitter")
+		p.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+		p.Color = ColorSequence.new(Color3.fromRGB(255, 240, 160))
+		p.Size = NumberSequence.new(1.2, 0)
+		p.Lifetime = NumberRange.new(0.2, 0.4)
+		p.Speed = NumberRange.new(20, 35)
+		p.SpreadAngle = Vector2.new(180, 180)
+		p.Rate = 0
+		p.Parent = a
+		p:Emit(25)
+		sonido("rbxasset://sounds/swordlunge.wav", 0.7, 1.4, r)
+		task.delay(1, function()
+			a:Destroy()
+		end)
+	end
+	if golpeado == player then
+		-- sacudida de cámara al recibir
+		local inicio = os.clock()
+		local con
+		con = RunService.RenderStepped:Connect(function()
+			local t = os.clock() - inicio
+			if t > 0.25 then
+				con:Disconnect()
+				return
+			end
+			local f = (1 - t / 0.25) * 0.6
+			camera.CFrame *= CFrame.Angles(math.rad((math.random() - 0.5) * f * 6), math.rad((math.random() - 0.5) * f * 6), 0)
+		end)
+	end
+end)
 ]]></ProtectedString></Properties></Item></Item></Item></roblox>

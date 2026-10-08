@@ -1,4 +1,4 @@
-# Movimiento FPS para Roblox (prototipo)
+# Pilla-pilla de parkour para Roblox (prototipo)
 
 Movimiento fluido en primera persona con dash, slide, doble salto, coyote time, buffer de
 salto y bunny-hop, más un mapa de pruebas que se construye solo al pulsar **Play**.
@@ -11,6 +11,7 @@ salto y bunny-hop, más un mapa de pruebas que se construye solo al pulsar **Pla
 | Salto / doble salto | Espacio | A | botón de salto |
 | Dash (3 cargas) | Shift izq. o Q | L1 o X | botón "Dash" |
 | Slide (mantener) | Ctrl izq. o C | B | botón "Slide" |
+| Manotazo (empuja) | clic izquierdo o E | R2 | botón "Manotazo" |
 
 Abajo en pantalla ves la velocidad y las cargas de dash.
 
@@ -20,6 +21,17 @@ Abajo en pantalla ves la velocidad y las cargas de dash.
 - **Slide-hop:** corre, desliza (Ctrl) y salta durante el slide para conservar el empujón.
 - **Dash + doble salto** para cruzar los huecos grandes del parkour.
 - Desliza en la **bajada verde** (sube por la escalera) para alcanzar la velocidad máxima.
+
+## Modo Contagio
+Uno empieza pillando (se queda quieto unos segundos para daros ventaja). Cada jugador al que da un
+manotazo pasa a pillar. Si al acabar el tiempo queda alguien sin pillar, ganan los que huyen.
+Los pilladores se ven en rojo y los que huyen en azul, incluso a través de las paredes.
+El modo "Corona robada" llegará con el lobby, donde se elegirá el modo.
+
+## Probar con varios jugadores
+Abre `MovimientoFPS.rbxlx` en Studio → pestaña **Probar** → en **Clientes y servidores** elige
+**3 jugadores** → **Iniciar**. Se abre una ventana por jugador. Si cambias algo en `src/`,
+regenera el archivo con `python3 herramientas/crear_rbxlx.py`.
 
 ## Cómo meterlo en Roblox Studio
 

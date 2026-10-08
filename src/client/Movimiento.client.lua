@@ -56,6 +56,9 @@ local function resetState()
 	s.landDip = 0
 	s.roll = 0
 	s.speed = 0
+
+	s.empujePendiente = nil
+	s.empujeHasta = -math.huge
 end
 resetState()
 
@@ -184,6 +187,23 @@ local function step(dt)
 		end
 	end
 
+	-- Empujón recibido (manotazo de otro jugador)
+	if s.empujePendiente then
+		local e = s.empujePendiente
+		s.empujePendiente = nil
+		horiz = flat(e)
+		vy = e.Y
+		setY = true
+		s.dashing = false
+		s.sliding = false
+		s.lastJumpAt = now
+		s.lastGroundedAt = -math.huge
+		grounded = false
+		s.empujeHasta = now + C.EMPUJE_SIN_LIMITE
+		s.fovPunch = C.FOV_DASH_PUNCH
+		humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+	end
+
 	-- Dash
 	if s.dashQueued then
 		s.dashQueued = false
@@ -238,7 +258,7 @@ local function step(dt)
 		horiz = steer(horiz, wish, C.AIR_STEER, dt)
 	end
 
-	if horiz.Magnitude > C.MAX_SPEED then
+	if horiz.Magnitude > C.MAX_SPEED and now > s.empujeHasta then
 		horiz = horiz.Unit * C.MAX_SPEED
 	end
 
@@ -404,6 +424,13 @@ player.CharacterAdded:Connect(onCharacter)
 if player.Character then
 	task.spawn(onCharacter, player.Character)
 end
+
+-- El servidor avisa cuando te dan un manotazo
+ReplicatedStorage:WaitForChild("Remotos"):WaitForChild("Empujon").OnClientEvent:Connect(function(vector)
+	if typeof(vector) == "Vector3" then
+		s.empujePendiente = vector
+	end
+end)
 
 RunService.PreSimulation:Connect(step)
 RunService:BindToRenderStep("MovimientoCamara", Enum.RenderPriority.Camera.Value + 1, function(dt)

@@ -24,6 +24,7 @@ local estado = {
 	estabaEnSuelo = true,
 	ultimoSalto = -math.huge,
 	salto = 0,
+	ultimoManotazo = -math.huge,
 }
 
 local function crearParte(nombre, tam, color, material)
@@ -161,6 +162,16 @@ local function actualizar(dt)
 	estado.estabaEnSuelo = enSuelo
 	estado.aterrizaje = lerp(estado.aterrizaje, 0, math.min(dt * 9, 1))
 
+	-- manotazo: el brazo derecho sale disparado y vuelve (0 → 1 → 0 en ~0,3 s)
+	local tm = os.clock() - (player:GetAttribute("MovManotazo") or -math.huge)
+	local golpe = 0
+	if tm < 0.08 then
+		golpe = tm / 0.08
+	elseif tm < 0.32 then
+		golpe = 1 - (tm - 0.08) / 0.24
+		golpe = golpe * golpe
+	end
+
 	local respira = math.sin(estado.tiempo * 1.6) * 0.012
 
 	for _, b in brazos do
@@ -187,6 +198,14 @@ local function actualizar(dt)
 		-- en el aire: suben un poco; al saltar, impulso hacia arriba
 		pos += Vector3.new(0.05 * l, 0.1, 0) * estado.aire + Vector3.new(0, 0.25, 0) * estado.salto
 		rot *= CFrame.Angles(math.rad(-15) * estado.salto, 0, 0)
+
+		-- manotazo con la mano derecha, abierta y de lado
+		if l == 1 and golpe > 0 then
+			pos += Vector3.new(-0.75, 0.55, -0.9) * golpe
+			rot *= CFrame.Angles(math.rad(-10) * golpe, math.rad(25) * golpe, math.rad(80) * golpe)
+		elseif l == -1 then
+			pos += Vector3.new(0, -0.1, 0.15) * golpe -- el otro brazo se recoge
+		end
 
 		-- aterrizaje: bajan de golpe
 		pos += Vector3.new(0, -0.22, 0) * estado.aterrizaje

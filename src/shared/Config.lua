@@ -52,4 +52,21 @@ return {
 
 	-- Servidor (anti-trampas básico)
 	SERVER_SPEED_TOLERANCE = 1.35,
+
+	-- Manotazo
+	MANOTAZO_ALCANCE = 8, -- studs desde el atacante
+	MANOTAZO_ANGULO = 0.45, -- producto escalar mínimo con la vista (0.45 ≈ 63°)
+	MANOTAZO_ESPERA = 0.7, -- segundos entre manotazos
+	MANOTAZO_EMPUJE = 70, -- velocidad horizontal con la que sale el golpeado
+	MANOTAZO_EMPUJE_ARRIBA = 32, -- y hacia arriba
+	MANOTAZO_EMPUJE_EXTRA_VEL = 0.35, -- parte de tu velocidad que se suma al empujón
+	EMPUJE_SIN_LIMITE = 0.5, -- segundos en que el empujado puede superar la velocidad máxima
+
+	-- Partida
+	MODO_INICIAL = "Contagio", -- más adelante se elegirá en el lobby
+	JUGADORES_MINIMOS = 2,
+	PREPARACION = 8, -- cuenta atrás antes de cada ronda
+	VENTAJA_HUIDA = 4, -- segundos que el pillador espera quieto al empezar
+	DURACION_RONDA = 120,
+	PAUSA_FINAL = 6,
 }
